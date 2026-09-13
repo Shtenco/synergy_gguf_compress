@@ -16,7 +16,7 @@ jobs:
           python-version: '3.12'
       - run: python -m pip install -U pip
       - run: python -m pip install -e '.[test]'
-      - run: pytest -q tests/test_v3.py tests/test_cpp_q4_kernel.py
+      - run: pytest -q tests/test_v3.py tests/test_cpp_q4_kernel.py tests/test_llama_v3_patcher.py
       - name: Build standalone fused Q4 benchmark
         run: |
           g++ -std=c++17 -O3 -Icpp cpp/bench_lowrank_q4.cpp -o /tmp/bench_lowrank_q4
