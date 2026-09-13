@@ -1,0 +1,33 @@
+name: llama.cpp native low-rank v2
+
+on:
+  push:
+    branches: ["feat/llama-native-lowrank-v2"]
+  pull_request:
+    paths:
+      - "llama_cpp_v2/**"
+      - "src/gguf_compress/native.py"
+      - ".github/workflows/llama-v2.yml"
+
+jobs:
+  patch-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout gguf_compress
+        uses: actions/checkout@v4
+
+      - name: Checkout pinned llama.cpp
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/llama.cpp
+          ref: 5f436dddb440a288ee5611d7d1eca564a6aca9f4
+          path: llama.cpp
+
+      - name: Apply native low-rank patch
+        run: python llama_cpp_v2/apply_patch.py llama.cpp
+
+      - name: Configure llama.cpp
+        run: cmake -S llama.cpp -B llama.cpp/build -DLLAMA_CURL=OFF -DLLAMA_BUILD_TESTS=OFF
+
+      - name: Build llama core
+        run: cmake --build llama.cpp/build --target llama -j2
