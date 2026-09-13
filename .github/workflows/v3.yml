@@ -1,0 +1,23 @@
+name: V3 adaptive residual Q4
+
+on:
+  push:
+    branches:
+      - feat/adaptive-residual-q4-v3
+  pull_request:
+
+jobs:
+  test-v3:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -U pip
+      - run: python -m pip install -e '.[dev]'
+      - run: pytest -q tests/test_v3.py tests/test_cpp_q4_kernel.py tests/test_llama_v3_patcher.py
+      - name: Build standalone fused Q4 benchmark
+        run: |
+          g++ -std=c++17 -O3 -Icpp cpp/bench_lowrank_q4.cpp -o /tmp/bench_lowrank_q4
+          /tmp/bench_lowrank_q4 512 16 4 5
