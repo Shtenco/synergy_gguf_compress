@@ -48,6 +48,18 @@ def cmd_inspect(args: argparse.Namespace) -> None:
     print(json.dumps(inspect_compressed(args.input), indent=2, ensure_ascii=False))
 
 
+def cmd_export_native(args: argparse.Namespace) -> None:
+    from .native import export_native_gguf
+    stats = export_native_gguf(args.input, args.output, factor_dtype=args.factor_dtype)
+    print(json.dumps({
+        "input_bytes": stats.input_bytes,
+        "output_bytes": stats.output_bytes,
+        "file_compression_ratio": stats.file_ratio,
+        "factorized_tensors": stats.factorized_tensors,
+        "passthrough_tensors": stats.passthrough_tensors,
+    }, indent=2))
+
+
 def cmd_bench(args: argparse.Namespace) -> None:
     from .benchmark import run_matrix_benchmark
     r = run_matrix_benchmark(
@@ -100,6 +112,12 @@ def build_parser() -> argparse.ArgumentParser:
     i = sub.add_parser("inspect", help="show compressed manifest and per-tensor error")
     i.add_argument("input", type=Path)
     i.set_defaults(func=cmd_inspect)
+
+    n = sub.add_parser("export-native", help="export v1 factors as standard F16/F32 tensors for native llama.cpp/GGML execution")
+    n.add_argument("input", type=Path)
+    n.add_argument("output", type=Path)
+    n.add_argument("--factor-dtype", choices=["f16", "f32"], default="f16")
+    n.set_defaults(func=cmd_export_native)
 
     b = sub.add_parser("benchmark", help="honest dense-vs-factorized CPU benchmark")
     b.add_argument("--size", type=int, default=2048)
