@@ -15,7 +15,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install -U pip
-      - run: python -m pip install -e '.[test]'
+      - run: python -m pip install -e '.[dev]'
       - run: pytest -q tests/test_v3.py tests/test_cpp_q4_kernel.py tests/test_llama_v3_patcher.py
       - name: Build standalone fused Q4 benchmark
         run: |
