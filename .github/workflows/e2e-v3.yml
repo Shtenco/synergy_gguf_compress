@@ -1,0 +1,188 @@
+name: V3 real GGUF end-to-end
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Reference GGUF for the end-to-end run"
+        required: true
+        default: "tinystories-15m"
+        type: choice
+        options:
+          - tinystories-15m
+          - qwen2.5-0.5b
+      target_rmse:
+        description: "Adaptive low-rank target relative RMSE"
+        required: true
+        default: "0.30"
+        type: string
+      residual_density:
+        description: "Sparse residual density per row"
+        required: true
+        default: "0.02"
+        type: string
+
+jobs:
+  real-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      LLAMA_COMMIT: 5f436dddb440a288ee5611d7d1eca564a6aca9f4
+      HF_HUB_DISABLE_XET: "1"
+    steps:
+      - name: Checkout gguf_compress
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install compressor
+        run: |
+          python -m pip install -U pip
+          python -m pip install -e '.[dev]'
+
+      - name: Checkout pinned llama.cpp
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/llama.cpp
+          ref: ${{ env.LLAMA_COMMIT }}
+          path: llama.cpp
+          fetch-depth: 1
+
+      - name: Apply V3 llama.cpp patch
+        run: python llama_cpp_v3/apply_patch.py llama.cpp
+
+      - name: Build patched llama.cpp CPU tools
+        run: |
+          cmake -S llama.cpp -B llama.cpp/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_EXAMPLES=ON \
+            -DLLAMA_BUILD_SERVER=OFF
+          cmake --build llama.cpp/build --target llama-bench llama-perplexity -j2
+          test -x llama.cpp/build/bin/llama-bench
+          test -x llama.cpp/build/bin/llama-perplexity
+
+      - name: Select model URL
+        id: model
+        shell: bash
+        run: |
+          if [ "${{ inputs.model }}" = "qwen2.5-0.5b" ]; then
+            echo 'url=https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf?download=true' >> "$GITHUB_OUTPUT"
+            echo 'name=qwen2.5-0.5b-instruct-q4_k_m.gguf' >> "$GITHUB_OUTPUT"
+            echo 'ranks=8,16,32,64,128' >> "$GITHUB_OUTPUT"
+            echo 'min_elements=131072' >> "$GITHUB_OUTPUT"
+          else
+            echo 'url=https://huggingface.co/ggml-org/models/resolve/main/tinyllamas/stories15M-q4_0.gguf?download=true' >> "$GITHUB_OUTPUT"
+            echo 'name=stories15M-q4_0.gguf' >> "$GITHUB_OUTPUT"
+            echo 'ranks=4,8,16,32,64' >> "$GITHUB_OUTPUT"
+            echo 'min_elements=32768' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download real GGUF and evaluation corpus
+        shell: bash
+        run: |
+          mkdir -p e2e
+          curl -L --fail --retry 5 --retry-delay 3 \
+            '${{ steps.model.outputs.url }}' \
+            -o 'e2e/${{ steps.model.outputs.name }}'
+          curl -L --fail --retry 5 --retry-delay 3 \
+            'https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt' \
+            -o e2e/corpus.txt
+          ls -lh e2e
+          sha256sum 'e2e/${{ steps.model.outputs.name }}' | tee e2e/model.sha256
+
+      - name: Compress real GGUF with V3 adaptive rank + residual
+        shell: bash
+        run: |
+          gguf-compress compress-v3 \
+            'e2e/${{ steps.model.outputs.name }}' \
+            e2e/model.v3.gguf \
+            --ranks '${{ steps.model.outputs.ranks }}' \
+            --target-rel-rmse '${{ inputs.target_rmse }}' \
+            --qbits 4 \
+            --residual-density '${{ inputs.residual_density }}' \
+            --min-elements '${{ steps.model.outputs.min_elements }}' \
+            --power-iters 1 \
+            | tee e2e/compress-v3.json
+
+          gguf-compress inspect-v3 e2e/model.v3.gguf > e2e/v3-manifest.json
+
+      - name: Export packed-Q4 native GGUF
+        run: |
+          gguf-compress export-native-q4 e2e/model.v3.gguf e2e/model.native-q4.gguf \
+            | tee e2e/export-native-q4.json
+          ls -lh 'e2e/${{ steps.model.outputs.name }}' e2e/model.v3.gguf e2e/model.native-q4.gguf
+
+      - name: Baseline load smoke test
+        run: |
+          llama.cpp/build/bin/llama-bench \
+            -m 'e2e/${{ steps.model.outputs.name }}' \
+            -p 32 -n 16 -r 1 -ngl 0 -o json \
+            > e2e/baseline-smoke.json
+
+      - name: Native V3 load smoke test
+        run: |
+          llama.cpp/build/bin/llama-bench \
+            -m e2e/model.native-q4.gguf \
+            -p 32 -n 16 -r 1 -ngl 0 -o json \
+            > e2e/native-smoke.json
+
+      - name: Full performance + perplexity + KL logit-drift benchmark
+        run: |
+          gguf-compress e2e-benchmark \
+            llama.cpp/build/bin/llama-bench \
+            llama.cpp/build/bin/llama-perplexity \
+            'e2e/${{ steps.model.outputs.name }}' \
+            e2e/model.native-q4.gguf \
+            e2e/corpus.txt \
+            --kld-file e2e/baseline.kld \
+            --output e2e/e2e-report.json \
+            --prompt-tokens 128 \
+            --gen-tokens 64 \
+            --repetitions 3 \
+            --n-gpu-layers 0 \
+            --context-size 512 \
+            --timeout 1800 \
+            | tee e2e/e2e-console.json
+
+      - name: Print compact result
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path('e2e/e2e-report.json')
+          if not p.exists():
+              print('e2e-report.json was not produced')
+              raise SystemExit(0)
+          d = json.loads(p.read_text())
+          perf = d['performance']['comparison']
+          quality = d['quality']['comparison']
+          print('file_compression_ratio=', perf.get('file_compression_ratio'))
+          print('prompt_processing_speedup=', perf.get('prompt_processing_speedup'))
+          print('generation_speedup=', perf.get('generation_speedup'))
+          print('rss_ratio_dense_over_compressed=', perf.get('rss_ratio_dense_over_compressed'))
+          print('perplexity_ratio=', quality.get('perplexity_ratio'))
+          print('perplexity_delta=', quality.get('perplexity_delta'))
+          print('kl_divergence=', quality.get('kl_divergence'))
+          print('pearson=', quality.get('pearson'))
+          print('same_top_p=', quality.get('same_top_p'))
+          print('rms_probability_change=', quality.get('rms_probability_change'))
+          PY
+
+      - name: Upload end-to-end evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v3-e2e-${{ inputs.model }}
+          path: |
+            e2e/*.json
+            e2e/*.sha256
+            e2e/*.kld
+          if-no-files-found: warn
+          retention-days: 14
