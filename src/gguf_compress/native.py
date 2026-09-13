@@ -3,13 +3,12 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 from .codec import CompressedMatrix, factors
-from .gguf_io import PREFIX, _copy_metadata, _gguf, _load_q, _read_manifest, _tensor_map
+from .gguf_io import _copy_metadata, _gguf, _load_q, _read_manifest, _tensor_map
 
 NATIVE_PREFIX = "gguf_compress.native."
 NATIVE_FORMAT_VERSION = 2
@@ -22,10 +21,28 @@ class NativeExportStats:
     output_bytes: int
     factorized_tensors: int
     passthrough_tensors: int
+    reconstructed_tensors: int
 
     @property
     def file_ratio(self) -> float:
         return self.input_bytes / max(self.output_bytes, 1)
+
+
+_NATIVE_LINEAR_SUFFIXES = (
+    ".attn_q.weight",
+    ".attn_k.weight",
+    ".attn_v.weight",
+    ".attn_qkv.weight",
+    ".attn_output.weight",
+    ".ffn_up.weight",
+    ".ffn_gate.weight",
+    ".ffn_down.weight",
+)
+
+
+def is_native_linear_name(name: str) -> bool:
+    """Conservative v2 allow-list for weights known to use the common linear path."""
+    return name == "output.weight" or name.endswith(_NATIVE_LINEAR_SUFFIXES)
 
 
 def native_tensor_names(original_name: str) -> tuple[str, str]:
@@ -67,7 +84,7 @@ def export_native_gguf(
 
     Both factors use standard F16/F32 GGUF tensor types so existing GGML CPU,
     CUDA, Metal, Vulkan, SYCL, etc. matrix-multiply kernels can execute them.
-    No dense W is reconstructed or written.
+    No dense W is reconstructed or written for supported native linear tensors.
     """
     if factor_dtype not in {"f16", "f32"}:
         raise ValueError("factor_dtype must be 'f16' or 'f32'")
@@ -98,6 +115,7 @@ def export_native_gguf(
 
     factorized_count = 0
     passthrough_count = 0
+    reconstructed_count = 0
 
     for entry in manifest["tensors"]:
         name = entry["name"]
@@ -122,6 +140,20 @@ def export_native_gguf(
             cosine=float(entry.get("cosine", 0.0)),
         )
         a, b = factors(cm)
+
+        if not is_native_linear_name(name):
+            # v2 must remain executable: tensors outside the central linear path
+            # are reconstructed once during export, not during model inference.
+            dense = np.ascontiguousarray(a @ b, dtype=np_dtype)
+            writer.add_tensor(name, dense)
+            native_manifest.setdefault("reconstructed", []).append({
+                "name": name,
+                "shape": list(cm.shape),
+                "reason": "not-covered-by-native-linear-path",
+            })
+            reconstructed_count += 1
+            continue
+
         b_name, a_name = native_tensor_names(name)
 
         # Numpy [rank, in] -> GGUF dims [in, rank], exactly what ggml_mul_mat(B, X) expects.
@@ -156,4 +188,5 @@ def export_native_gguf(
         output_bytes=os.path.getsize(output_path),
         factorized_tensors=factorized_count,
         passthrough_tensors=passthrough_count,
+        reconstructed_tensors=reconstructed_count,
     )
