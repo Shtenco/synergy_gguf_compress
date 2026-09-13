@@ -14,6 +14,13 @@ def _preset(name: str) -> dict:
     return presets[name]
 
 
+def _parse_ranks(value: str) -> tuple[int, ...]:
+    ranks = tuple(sorted({int(v.strip()) for v in value.split(",") if v.strip()}))
+    if not ranks or any(r < 1 for r in ranks):
+        raise argparse.ArgumentTypeError("ranks must be a comma-separated list of positive integers")
+    return ranks
+
+
 def cmd_compress(args: argparse.Namespace) -> None:
     from .gguf_io import compress_gguf
     p = _preset(args.preset)
@@ -37,6 +44,35 @@ def cmd_compress(args: argparse.Namespace) -> None:
     }, indent=2))
 
 
+def cmd_compress_v3(args: argparse.Namespace) -> None:
+    from .v3_io import compress_gguf_v3
+    stats = compress_gguf_v3(
+        args.input,
+        args.output,
+        candidates=args.ranks,
+        target_rel_rmse=args.target_rel_rmse,
+        qbits=args.qbits,
+        residual_density=args.residual_density,
+        min_elements=args.min_elements,
+        max_corrected_rel_rmse=args.max_corrected_rel_rmse,
+        seed=args.seed,
+        oversample=args.oversample,
+        power_iters=args.power_iters,
+    )
+    print(json.dumps({
+        "input_bytes": stats.input_bytes,
+        "output_bytes": stats.output_bytes,
+        "file_compression_ratio": stats.file_ratio,
+        "factorized_tensors": stats.factorized_tensors,
+        "passthrough_tensors": stats.passthrough_tensors,
+        "mean_rel_rmse_before_residual": stats.mean_rel_rmse,
+        "mean_rel_rmse_after_residual": stats.mean_corrected_rel_rmse,
+        "mean_rank": stats.mean_rank,
+        "residual_nnz": stats.residual_nnz,
+        "elapsed_seconds": stats.elapsed_seconds,
+    }, indent=2))
+
+
 def cmd_decompress(args: argparse.Namespace) -> None:
     from .gguf_io import decompress_gguf
     decompress_gguf(args.input, args.output)
@@ -46,6 +82,11 @@ def cmd_decompress(args: argparse.Namespace) -> None:
 def cmd_inspect(args: argparse.Namespace) -> None:
     from .gguf_io import inspect_compressed
     print(json.dumps(inspect_compressed(args.input), indent=2, ensure_ascii=False))
+
+
+def cmd_inspect_v3(args: argparse.Namespace) -> None:
+    from .v3_io import inspect_v3
+    print(json.dumps(inspect_v3(args.input), indent=2, ensure_ascii=False))
 
 
 def cmd_export_native(args: argparse.Namespace) -> None:
@@ -59,6 +100,34 @@ def cmd_export_native(args: argparse.Namespace) -> None:
         "passthrough_tensors": stats.passthrough_tensors,
         "reconstructed_tensors": stats.reconstructed_tensors,
     }, indent=2))
+
+
+def cmd_export_native_q4(args: argparse.Namespace) -> None:
+    from .native_q4 import export_native_q4_gguf
+    stats = export_native_q4_gguf(args.input, args.output)
+    print(json.dumps({
+        "input_bytes": stats.input_bytes,
+        "output_bytes": stats.output_bytes,
+        "file_compression_ratio": stats.file_ratio,
+        "native_q4_layers": stats.q4_layers,
+        "reconstructed_layers": stats.reconstructed_layers,
+        "passthrough_tensors": stats.passthrough_tensors,
+    }, indent=2))
+
+
+def cmd_real_bench(args: argparse.Namespace) -> None:
+    from .real_bench import run_real_benchmark
+    report = run_real_benchmark(
+        llama_bench=args.llama_bench,
+        dense_model=args.dense_model,
+        compressed_model=args.compressed_model,
+        prompt_tokens=args.prompt_tokens,
+        gen_tokens=args.gen_tokens,
+        repetitions=args.repetitions,
+        threads=args.threads,
+        n_gpu_layers=args.n_gpu_layers,
+    )
+    print(json.dumps(report, indent=2, ensure_ascii=False))
 
 
 def cmd_bench(args: argparse.Namespace) -> None:
@@ -91,7 +160,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="gguf-compress", description="Experimental measurable GGUF factorization compressor")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    c = sub.add_parser("compress", help="compress a GGUF into the custom factorized GGUF container")
+    c = sub.add_parser("compress", help="compress a GGUF into the v1 custom factorized container")
     c.add_argument("input", type=Path)
     c.add_argument("output", type=Path)
     c.add_argument("--method", choices=["svd-lowrank", "seed-projection"], default="svd-lowrank")
@@ -105,20 +174,54 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--power-iters", type=int, default=1)
     c.set_defaults(func=cmd_compress)
 
-    d = sub.add_parser("decompress", help="reconstruct a standard F16 GGUF")
+    v3 = sub.add_parser("compress-v3", help="adaptive-rank Q4/Q8 compression with sparse residual correction")
+    v3.add_argument("input", type=Path)
+    v3.add_argument("output", type=Path)
+    v3.add_argument("--ranks", type=_parse_ranks, default=(4, 8, 16, 32, 64, 128, 256))
+    v3.add_argument("--target-rel-rmse", type=float, default=0.20)
+    v3.add_argument("--qbits", type=int, choices=[4, 8], default=4)
+    v3.add_argument("--residual-density", type=float, default=0.01)
+    v3.add_argument("--max-corrected-rel-rmse", type=float)
+    v3.add_argument("--seed", default="gguf-compress-v3")
+    v3.add_argument("--min-elements", type=int, default=131072)
+    v3.add_argument("--oversample", type=int, default=8)
+    v3.add_argument("--power-iters", type=int, default=1)
+    v3.set_defaults(func=cmd_compress_v3)
+
+    d = sub.add_parser("decompress", help="reconstruct a standard F16 GGUF from v1")
     d.add_argument("input", type=Path)
     d.add_argument("output", type=Path)
     d.set_defaults(func=cmd_decompress)
 
-    i = sub.add_parser("inspect", help="show compressed manifest and per-tensor error")
+    i = sub.add_parser("inspect", help="show v1 compressed manifest and per-tensor error")
     i.add_argument("input", type=Path)
     i.set_defaults(func=cmd_inspect)
+
+    i3 = sub.add_parser("inspect-v3", help="show adaptive rank search and residual quality for V3")
+    i3.add_argument("input", type=Path)
+    i3.set_defaults(func=cmd_inspect_v3)
 
     n = sub.add_parser("export-native", help="export v1 factors as standard F16/F32 tensors for native llama.cpp/GGML execution")
     n.add_argument("input", type=Path)
     n.add_argument("output", type=Path)
     n.add_argument("--factor-dtype", choices=["f16", "f32"], default="f16")
     n.set_defaults(func=cmd_export_native)
+
+    nq = sub.add_parser("export-native-q4", help="export V3 as packed Q4 factors + sparse residual for the V3 llama.cpp CPU kernel")
+    nq.add_argument("input", type=Path)
+    nq.add_argument("output", type=Path)
+    nq.set_defaults(func=cmd_export_native_q4)
+
+    rb = sub.add_parser("real-benchmark", help="compare dense and native models with llama-bench JSON output")
+    rb.add_argument("llama_bench", type=Path)
+    rb.add_argument("dense_model", type=Path)
+    rb.add_argument("compressed_model", type=Path)
+    rb.add_argument("--prompt-tokens", type=int, default=512)
+    rb.add_argument("--gen-tokens", type=int, default=128)
+    rb.add_argument("--repetitions", type=int, default=5)
+    rb.add_argument("--threads", type=int)
+    rb.add_argument("--n-gpu-layers", type=int, default=0)
+    rb.set_defaults(func=cmd_real_bench)
 
     b = sub.add_parser("benchmark", help="honest dense-vs-factorized CPU benchmark")
     b.add_argument("--size", type=int, default=2048)
