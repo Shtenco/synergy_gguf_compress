@@ -57,6 +57,7 @@ def cmd_export_native(args: argparse.Namespace) -> None:
         "file_compression_ratio": stats.file_ratio,
         "factorized_tensors": stats.factorized_tensors,
         "passthrough_tensors": stats.passthrough_tensors,
+        "reconstructed_tensors": stats.reconstructed_tensors,
     }, indent=2))
 
 
