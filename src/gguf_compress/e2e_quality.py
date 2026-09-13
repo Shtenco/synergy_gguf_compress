@@ -12,6 +12,7 @@ from .real_bench import run_real_benchmark
 
 
 _FLOAT = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
+DEFAULT_MAX_KLD_CORPUS_BYTES = 4096
 
 
 def _last_float(text: str, patterns: tuple[str, ...]) -> float | None:
@@ -28,8 +29,8 @@ def _last_float(text: str, patterns: tuple[str, ...]) -> float | None:
 def parse_perplexity_output(text: str) -> dict[str, float | None]:
     """Best-effort parser for llama-perplexity output across llama.cpp versions.
 
-    Raw stdout/stderr is always kept by the caller, so a future upstream wording
-    change cannot hide information even if one of these optional fields is null.
+    Raw stdout/stderr is always retained, so an upstream wording change cannot
+    hide the evidence even when an optional parsed metric becomes null.
     """
     return {
         "perplexity": _last_float(text, (
@@ -37,18 +38,20 @@ def parse_perplexity_output(text: str) -> dict[str, float | None]:
             rf"\bperplexity\s*(?:=|:)\s*({_FLOAT})",
         )),
         "kl_divergence": _last_float(text, (
+            rf"\bKLD\s*(?:=|:)\s*({_FLOAT})",
             rf"\bKL(?:[- ]?divergence|D)?\s*(?:=|:)\s*({_FLOAT})",
             rf"\bKullback(?:[- ]Leibler)?(?:\s+divergence)?\s*(?:=|:)\s*({_FLOAT})",
         )),
         "pearson": _last_float(text, (
             rf"\bPearson(?:\s+(?:correlation|r))?\s*(?:=|:)\s*({_FLOAT})",
+            rf"\bcorr(?:elation)?\s*(?:=|:)\s*({_FLOAT})",
         )),
         "same_top_p": _last_float(text, (
             rf"\bsame[- ]top[- ]p\s*(?:=|:)\s*({_FLOAT})",
             rf"\bsame top p\s*(?:=|:)\s*({_FLOAT})",
         )),
         "rms_probability_change": _last_float(text, (
-            rf"\bRMS(?:\s+probability)?(?:\s+change)?\s*(?:=|:)\s*({_FLOAT})",
+            rf"\bRMS(?:\s+probability)?(?:\s+change|\s+delta[- ]?p|\s+Δp)?\s*(?:=|:)\s*({_FLOAT})",
         )),
     }
 
@@ -70,6 +73,30 @@ def _run(cmd: list[str], *, timeout: int | None = None) -> dict[str, Any]:
     }
 
 
+def _bounded_corpus(source: Path, kld_path: Path, max_bytes: int | None) -> tuple[Path, int, bool]:
+    """Create a bounded UTF-8 corpus next to the KLD file when needed.
+
+    llama-perplexity's KLD reference stores vocabulary-wide logit information
+    per evaluated token. On modern large-vocabulary models an innocent full
+    corpus can therefore create multi-gigabyte files. The first real E2E gate
+    deliberately uses a small deterministic prefix; users can opt out by
+    passing max_corpus_bytes=None.
+    """
+    original_size = source.stat().st_size
+    if max_bytes is None or original_size <= max_bytes:
+        return source, original_size, False
+    if max_bytes < 512:
+        raise ValueError("max_corpus_bytes must be >= 512 or None")
+
+    data = source.read_bytes()[:max_bytes]
+    # Avoid ending in the middle of a UTF-8 code point.
+    text = data.decode("utf-8", errors="ignore")
+    bounded = kld_path.with_suffix(kld_path.suffix + ".corpus.txt")
+    bounded.parent.mkdir(parents=True, exist_ok=True)
+    bounded.write_text(text, encoding="utf-8")
+    return bounded, bounded.stat().st_size, True
+
+
 def run_quality_benchmark(
     *,
     llama_perplexity: str | os.PathLike[str],
@@ -81,6 +108,7 @@ def run_quality_benchmark(
     n_gpu_layers: int = 0,
     context_size: int | None = None,
     timeout: int | None = None,
+    max_corpus_bytes: int | None = DEFAULT_MAX_KLD_CORPUS_BYTES,
 ) -> dict[str, Any]:
     """Measure PPL and logit-distribution drift using llama.cpp's KLD mode."""
     exe = Path(llama_perplexity)
@@ -92,7 +120,10 @@ def run_quality_benchmark(
         if not path.exists():
             raise FileNotFoundError(path)
 
-    common = ["-f", str(corpus_path), "-ngl", str(n_gpu_layers)]
+    eval_corpus, eval_corpus_bytes, corpus_was_bounded = _bounded_corpus(
+        corpus_path, kld_path, max_corpus_bytes
+    )
+    common = ["-f", str(eval_corpus), "-ngl", str(n_gpu_layers)]
     if threads is not None:
         common += ["-t", str(threads)]
     if context_size is not None:
@@ -121,7 +152,12 @@ def run_quality_benchmark(
 
     return {
         "settings": {
-            "corpus": str(corpus_path),
+            "source_corpus": str(corpus_path),
+            "evaluation_corpus": str(eval_corpus),
+            "source_corpus_bytes": corpus_path.stat().st_size,
+            "evaluation_corpus_bytes": eval_corpus_bytes,
+            "corpus_was_bounded": corpus_was_bounded,
+            "max_corpus_bytes": max_corpus_bytes,
             "threads": threads,
             "n_gpu_layers": n_gpu_layers,
             "context_size": context_size,
@@ -160,8 +196,9 @@ def run_quality_benchmark(
             "kld_reference_bytes": kld_path.stat().st_size,
         },
         "notes": [
-            "Lower perplexity is better; compare the ratio/delta against the baseline model.",
+            "Lower perplexity is better; compare the ratio/delta against the exact baseline model.",
             "KL divergence is computed from llama.cpp's baseline-logit file; zero means identical distributions.",
+            "The default KLD corpus is intentionally bounded to avoid accidental multi-gigabyte logit files.",
             "Raw llama-perplexity stdout/stderr is preserved because upstream metric wording can change.",
         ],
     }
@@ -182,6 +219,7 @@ def run_end_to_end_benchmark(
     n_gpu_layers: int = 0,
     context_size: int | None = None,
     timeout: int | None = None,
+    max_corpus_bytes: int | None = DEFAULT_MAX_KLD_CORPUS_BYTES,
 ) -> dict[str, Any]:
     """One report combining file/RAM/speed and PPL/logit-distribution quality."""
     performance = run_real_benchmark(
@@ -204,6 +242,7 @@ def run_end_to_end_benchmark(
         n_gpu_layers=n_gpu_layers,
         context_size=context_size,
         timeout=timeout,
+        max_corpus_bytes=max_corpus_bytes,
     )
     return {
         "performance": performance,
