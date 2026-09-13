@@ -130,6 +130,28 @@ def cmd_real_bench(args: argparse.Namespace) -> None:
     print(json.dumps(report, indent=2, ensure_ascii=False))
 
 
+def cmd_e2e_bench(args: argparse.Namespace) -> None:
+    from .e2e_quality import run_end_to_end_benchmark, write_json_report
+    report = run_end_to_end_benchmark(
+        llama_bench=args.llama_bench,
+        llama_perplexity=args.llama_perplexity,
+        dense_model=args.dense_model,
+        compressed_model=args.compressed_model,
+        corpus=args.corpus,
+        kld_file=args.kld_file,
+        prompt_tokens=args.prompt_tokens,
+        gen_tokens=args.gen_tokens,
+        repetitions=args.repetitions,
+        threads=args.threads,
+        n_gpu_layers=args.n_gpu_layers,
+        context_size=args.context_size,
+        timeout=args.timeout,
+    )
+    if args.output:
+        write_json_report(report, args.output)
+    print(json.dumps(report, indent=2, ensure_ascii=False))
+
+
 def cmd_bench(args: argparse.Namespace) -> None:
     from .benchmark import run_matrix_benchmark
     r = run_matrix_benchmark(
@@ -222,6 +244,23 @@ def build_parser() -> argparse.ArgumentParser:
     rb.add_argument("--threads", type=int)
     rb.add_argument("--n-gpu-layers", type=int, default=0)
     rb.set_defaults(func=cmd_real_bench)
+
+    e2e = sub.add_parser("e2e-benchmark", help="combined llama-bench + perplexity/KL logit-drift comparison")
+    e2e.add_argument("llama_bench", type=Path)
+    e2e.add_argument("llama_perplexity", type=Path)
+    e2e.add_argument("dense_model", type=Path)
+    e2e.add_argument("compressed_model", type=Path)
+    e2e.add_argument("corpus", type=Path)
+    e2e.add_argument("--kld-file", type=Path, default=Path("baseline.kld"))
+    e2e.add_argument("--output", type=Path)
+    e2e.add_argument("--prompt-tokens", type=int, default=128)
+    e2e.add_argument("--gen-tokens", type=int, default=64)
+    e2e.add_argument("--repetitions", type=int, default=3)
+    e2e.add_argument("--threads", type=int)
+    e2e.add_argument("--n-gpu-layers", type=int, default=0)
+    e2e.add_argument("--context-size", type=int, default=512)
+    e2e.add_argument("--timeout", type=int)
+    e2e.set_defaults(func=cmd_e2e_bench)
 
     b = sub.add_parser("benchmark", help="honest dense-vs-factorized CPU benchmark")
     b.add_argument("--size", type=int, default=2048)
