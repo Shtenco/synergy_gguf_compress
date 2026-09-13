@@ -1,6 +1,9 @@
 name: V3 real GGUF end-to-end
 
 on:
+  push:
+    branches:
+      - feat/adaptive-residual-q4-v3
   workflow_dispatch:
     inputs:
       model:
@@ -29,6 +32,9 @@ jobs:
     env:
       LLAMA_COMMIT: 5f436dddb440a288ee5611d7d1eca564a6aca9f4
       HF_HUB_DISABLE_XET: "1"
+      E2E_MODEL: ${{ inputs.model || 'tinystories-15m' }}
+      E2E_TARGET_RMSE: ${{ inputs.target_rmse || '0.30' }}
+      E2E_RESIDUAL_DENSITY: ${{ inputs.residual_density || '0.02' }}
     steps:
       - name: Checkout gguf_compress
         uses: actions/checkout@v4
@@ -70,7 +76,7 @@ jobs:
         id: model
         shell: bash
         run: |
-          if [ "${{ inputs.model }}" = "qwen2.5-0.5b" ]; then
+          if [ "$E2E_MODEL" = "qwen2.5-0.5b" ]; then
             echo 'url=https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf?download=true' >> "$GITHUB_OUTPUT"
             echo 'name=qwen2.5-0.5b-instruct-q4_k_m.gguf' >> "$GITHUB_OUTPUT"
             echo 'ranks=8,16,32,64,128' >> "$GITHUB_OUTPUT"
@@ -102,9 +108,9 @@ jobs:
             'e2e/${{ steps.model.outputs.name }}' \
             e2e/model.v3.gguf \
             --ranks '${{ steps.model.outputs.ranks }}' \
-            --target-rel-rmse '${{ inputs.target_rmse }}' \
+            --target-rel-rmse "$E2E_TARGET_RMSE" \
             --qbits 4 \
-            --residual-density '${{ inputs.residual_density }}' \
+            --residual-density "$E2E_RESIDUAL_DENSITY" \
             --min-elements '${{ steps.model.outputs.min_elements }}' \
             --power-iters 1 \
             | tee e2e/compress-v3.json
@@ -179,7 +185,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: v3-e2e-${{ inputs.model }}
+          name: v3-e2e-${{ env.E2E_MODEL }}
           path: |
             e2e/*.json
             e2e/*.sha256
