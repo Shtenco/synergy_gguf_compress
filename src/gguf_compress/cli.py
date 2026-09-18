@@ -21,6 +21,13 @@ def _parse_ranks(value: str) -> tuple[int, ...]:
     return ranks
 
 
+def _parse_floats(value: str) -> tuple[float, ...]:
+    values = tuple(sorted({float(v.strip()) for v in value.split(",") if v.strip()}))
+    if not values:
+        raise argparse.ArgumentTypeError("expected a comma-separated list of numbers")
+    return values
+
+
 def cmd_compress(args: argparse.Namespace) -> None:
     from .gguf_io import compress_gguf
     p = _preset(args.preset)
@@ -214,6 +221,67 @@ def cmd_distill(args: argparse.Namespace) -> None:
 
 
 
+
+def cmd_calibrate_hf(args: argparse.Namespace) -> None:
+    from .hf_calibration import capture_hf_activation_stats
+    report = capture_hf_activation_stats(
+        args.model_id,
+        args.corpus,
+        args.output,
+        max_samples=args.max_samples,
+        max_length=args.max_length,
+        device=args.device,
+        trust_remote_code=args.trust_remote_code,
+    )
+    print(json.dumps(report, indent=2, ensure_ascii=False))
+
+
+def cmd_pareto_v5(args: argparse.Namespace) -> None:
+    from .pareto import V5Config, run_v5_pareto
+    from .system import RuntimeInputs
+
+    config = V5Config(
+        ranks=args.ranks,
+        residual_densities=args.residual_densities,
+        target_ratios=args.target_ratios,
+        qbits=4,
+        min_elements=args.min_elements,
+        seed=args.seed,
+        oversample=args.oversample,
+        power_iters=args.power_iters,
+        require_calibration=not args.allow_uniform_fallback,
+        max_activation_rel_rmse=args.max_activation_rel_rmse,
+    )
+
+    runtime = None
+    runtime_fields = (args.llama_bench, args.llama_perplexity, args.corpus)
+    if any(v is not None for v in runtime_fields):
+        if not all(v is not None for v in runtime_fields):
+            raise SystemExit("--llama-bench, --llama-perplexity and --corpus must be supplied together")
+        runtime = RuntimeInputs(
+            llama_bench=args.llama_bench,
+            llama_perplexity=args.llama_perplexity,
+            corpus=args.corpus,
+            prompt_tokens=args.prompt_tokens,
+            gen_tokens=args.gen_tokens,
+            repetitions=args.repetitions,
+            threads=args.threads,
+            n_gpu_layers=args.n_gpu_layers,
+            context_size=args.context_size,
+            timeout=args.timeout,
+        )
+
+    report = run_v5_pareto(
+        args.input,
+        args.output_dir,
+        args.activation_stats,
+        config=config,
+        runtime=runtime,
+    )
+    print(json.dumps(report, indent=2, ensure_ascii=False))
+
+
+
 def cmd_bench(args: argparse.Namespace) -> None:
     from .benchmark import run_matrix_benchmark
     r = run_matrix_benchmark(
@@ -360,6 +428,48 @@ def build_parser() -> argparse.ArgumentParser:
     ds.add_argument("--min-generation-speedup", type=float)
     ds.add_argument("--fail-on-gate", action="store_true")
     ds.set_defaults(func=cmd_distill)
+
+
+    cal = sub.add_parser(
+        "calibrate-hf",
+        help="capture activation second moments from a Hugging Face Llama/Qwen model",
+    )
+    cal.add_argument("model_id")
+    cal.add_argument("corpus", type=Path)
+    cal.add_argument("output", type=Path)
+    cal.add_argument("--max-samples", type=int, default=8)
+    cal.add_argument("--max-length", type=int, default=256)
+    cal.add_argument("--device", default="cpu")
+    cal.add_argument("--trust-remote-code", action="store_true")
+    cal.set_defaults(func=cmd_calibrate_hf)
+
+    p5 = sub.add_parser(
+        "pareto-v5",
+        help="global activation-aware rank/residual allocation and Pareto frontier",
+    )
+    p5.add_argument("input", type=Path)
+    p5.add_argument("activation_stats", type=Path)
+    p5.add_argument("output_dir", type=Path)
+    p5.add_argument("--ranks", type=_parse_ranks, default=(8, 16, 32, 64, 128))
+    p5.add_argument("--residual-densities", type=_parse_floats, default=(0.0, 0.0025, 0.01))
+    p5.add_argument("--target-ratios", type=_parse_floats, default=(0.90, 0.75, 0.60, 0.45))
+    p5.add_argument("--min-elements", type=int, default=131072)
+    p5.add_argument("--seed", default="gguf-compress-v5")
+    p5.add_argument("--oversample", type=int, default=8)
+    p5.add_argument("--power-iters", type=int, default=1)
+    p5.add_argument("--max-activation-rel-rmse", type=float, default=0.50)
+    p5.add_argument("--allow-uniform-fallback", action="store_true")
+    p5.add_argument("--llama-bench", type=Path)
+    p5.add_argument("--llama-perplexity", type=Path)
+    p5.add_argument("--corpus", type=Path)
+    p5.add_argument("--prompt-tokens", type=int, default=128)
+    p5.add_argument("--gen-tokens", type=int, default=64)
+    p5.add_argument("--repetitions", type=int, default=3)
+    p5.add_argument("--threads", type=int)
+    p5.add_argument("--n-gpu-layers", type=int, default=0)
+    p5.add_argument("--context-size", type=int, default=512)
+    p5.add_argument("--timeout", type=int, default=1800)
+    p5.set_defaults(func=cmd_pareto_v5)
 
     b = sub.add_parser("benchmark", help="honest dense-vs-factorized CPU benchmark")
     b.add_argument("--size", type=int, default=2048)
