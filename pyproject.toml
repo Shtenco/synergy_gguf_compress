@@ -19,6 +19,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8"]
 train = ["torch>=2.4"]
+calibrate = ["torch>=2.4", "transformers>=4.48", "safetensors>=0.4"]
 
 [project.scripts]
 gguf-compress = "gguf_compress.cli:main"
