@@ -136,6 +136,43 @@ g++ -std=c++17 -O3 -Icpp cpp/bench_lowrank_q4.cpp -o bench_lowrank_q4
 
 On the development scalar reference run, `1024×1024`, rank 16, batch 4 measured about **26.5×** speedup over the same scalar dense reference with max absolute numerical difference around **0.0053**. This is a kernel-path sanity benchmark, **not** a claim of 26.5× over optimized BLAS/GGML.
 
+## V4 distilled system
+
+V4 is the canonical orchestration layer that turns the previous V1-V3 experiments into one reproducible pipeline:
+
+```text
+source GGUF
+  -> adaptive low-rank analysis
+  -> per-tensor rank selection
+  -> sparse residual correction
+  -> packed Q4 native export
+  -> static quality gates
+  -> optional llama.cpp end-to-end quality/performance gates
+  -> signed JSON evidence report with SHA-256 for every artifact
+```
+
+Run the storage/operator pipeline:
+
+```bash
+gguf-compress distill model.gguf out/
+```
+
+Run the full end-to-end gate when patched llama.cpp tools are available:
+
+```bash
+gguf-compress distill model.gguf out/ \
+  --llama-bench /path/to/llama-bench \
+  --llama-perplexity /path/to/llama-perplexity \
+  --corpus corpus.txt \
+  --fail-on-gate
+```
+
+The generated `*.distilled-report.json` keeps storage compression, matrix reconstruction quality, runtime speed, perplexity and logit-distribution evidence separate. A static PASS is explicitly not reported as an end-to-end model-quality PASS when llama.cpp was not actually executed.
+
+V4 currently uses the V3 adaptive rank + sparse residual codec and packed-Q4 runtime representation as its compression engine. The point of V4 is not a new mathematical codec; it is the missing production layer that makes compression decisions reproducible, measurable and rejectable by gates instead of relying on hand-picked benchmark claims.
+
+See [`docs/V4_DISTILLED_SYSTEM.md`](docs/V4_DISTILLED_SYSTEM.md).
+
 ## Training benchmark
 
 ```bash
