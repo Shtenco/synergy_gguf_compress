@@ -173,6 +173,41 @@ V4 currently uses the V3 adaptive rank + sparse residual codec and packed-Q4 run
 
 See [`docs/V4_DISTILLED_SYSTEM.md`](docs/V4_DISTILLED_SYSTEM.md).
 
+## V5 global budget optimizer
+
+V5 optimizes the **whole model under one byte budget** instead of selecting a rank independently for each tensor.
+
+It adds activation-aware calibration using per-input-channel `E[x^2]`, evaluates a grid of `(rank, residual density)` candidates, prunes dominated choices and globally allocates bytes to the layers where they reduce calibrated output distortion the most.
+
+Capture real Llama/Qwen activation statistics:
+
+```bash
+python -m pip install -e '.[calibrate]'
+
+gguf-compress calibrate-hf \
+  Qwen/Qwen2.5-0.5B-Instruct \
+  corpus.txt \
+  activation-stats.npz
+```
+
+Build several global budget points and the Pareto frontier:
+
+```bash
+gguf-compress pareto-v5 \
+  model.gguf \
+  activation-stats.npz \
+  out/ \
+  --ranks 8,16,32,64,128 \
+  --residual-densities 0,0.0025,0.01 \
+  --target-ratios 0.90,0.75,0.60,0.45
+```
+
+When patched `llama-bench` and `llama-perplexity` are supplied, V5 evaluates every feasible budget point end-to-end and marks the actual `native size vs perplexity` Pareto frontier.
+
+Outputs include `pareto-v5.json`, `pareto-v5.csv`, `pareto-v5.svg`, per-budget plans and native-Q4 models.
+
+See [`docs/V5_GLOBAL_BUDGET.md`](docs/V5_GLOBAL_BUDGET.md).
+
 ## Training benchmark
 
 ```bash
