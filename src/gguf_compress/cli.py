@@ -152,6 +152,68 @@ def cmd_e2e_bench(args: argparse.Namespace) -> None:
     print(json.dumps(report, indent=2, ensure_ascii=False))
 
 
+
+def cmd_distill(args: argparse.Namespace) -> None:
+    from .system import (
+        DistilledConfig,
+        RuntimeInputs,
+        RuntimeQualityGates,
+        StaticQualityGates,
+        run_distilled_system,
+    )
+
+    static_gates = StaticQualityGates(
+        min_file_compression_ratio=args.min_file_compression_ratio,
+        min_factorized_tensors=args.min_factorized_tensors,
+        max_mean_corrected_rel_rmse=args.max_mean_corrected_rel_rmse,
+        max_tensor_corrected_rel_rmse=args.max_tensor_corrected_rel_rmse,
+    )
+    runtime_gates = RuntimeQualityGates(
+        max_perplexity_ratio=args.max_perplexity_ratio,
+        max_kl_divergence=args.max_kl_divergence,
+        min_same_top_p=args.min_same_top_p,
+        min_prompt_processing_speedup=args.min_prompt_processing_speedup,
+        min_generation_speedup=args.min_generation_speedup,
+    )
+    config = DistilledConfig(
+        ranks=args.ranks,
+        target_rel_rmse=args.target_rel_rmse,
+        qbits=4,
+        residual_density=args.residual_density,
+        max_corrected_rel_rmse=args.max_corrected_rel_rmse,
+        min_elements=args.min_elements,
+        seed=args.seed,
+        oversample=args.oversample,
+        power_iters=args.power_iters,
+        static_gates=static_gates,
+        runtime_gates=runtime_gates,
+    )
+
+    runtime = None
+    runtime_fields = (args.llama_bench, args.llama_perplexity, args.corpus)
+    if any(v is not None for v in runtime_fields):
+        if not all(v is not None for v in runtime_fields):
+            raise SystemExit("--llama-bench, --llama-perplexity and --corpus must be supplied together")
+        runtime = RuntimeInputs(
+            llama_bench=args.llama_bench,
+            llama_perplexity=args.llama_perplexity,
+            corpus=args.corpus,
+            prompt_tokens=args.prompt_tokens,
+            gen_tokens=args.gen_tokens,
+            repetitions=args.repetitions,
+            threads=args.threads,
+            n_gpu_layers=args.n_gpu_layers,
+            context_size=args.context_size,
+            timeout=args.timeout,
+        )
+
+    report = run_distilled_system(args.input, args.output_dir, config=config, runtime=runtime)
+    print(json.dumps(report, indent=2, ensure_ascii=False))
+    if args.fail_on_gate and report["overall_status"] != "PASS":
+        raise SystemExit(2)
+
+
+
 def cmd_bench(args: argparse.Namespace) -> None:
     from .benchmark import run_matrix_benchmark
     r = run_matrix_benchmark(
@@ -261,6 +323,43 @@ def build_parser() -> argparse.ArgumentParser:
     e2e.add_argument("--context-size", type=int, default=512)
     e2e.add_argument("--timeout", type=int)
     e2e.set_defaults(func=cmd_e2e_bench)
+
+
+    ds = sub.add_parser(
+        "distill",
+        help="canonical V4 pipeline: adaptive compression -> native Q4 -> quality gates -> optional llama.cpp E2E",
+    )
+    ds.add_argument("input", type=Path)
+    ds.add_argument("output_dir", type=Path)
+    ds.add_argument("--ranks", type=_parse_ranks, default=(4, 8, 16, 32, 64, 128, 256))
+    ds.add_argument("--target-rel-rmse", type=float, default=0.20)
+    ds.add_argument("--residual-density", type=float, default=0.01)
+    ds.add_argument("--max-corrected-rel-rmse", type=float, default=0.40)
+    ds.add_argument("--min-elements", type=int, default=131072)
+    ds.add_argument("--seed", default="gguf-compress-v4")
+    ds.add_argument("--oversample", type=int, default=8)
+    ds.add_argument("--power-iters", type=int, default=1)
+    ds.add_argument("--min-file-compression-ratio", type=float, default=1.0)
+    ds.add_argument("--min-factorized-tensors", type=int, default=1)
+    ds.add_argument("--max-mean-corrected-rel-rmse", type=float, default=0.30)
+    ds.add_argument("--max-tensor-corrected-rel-rmse", type=float, default=0.40)
+    ds.add_argument("--llama-bench", type=Path)
+    ds.add_argument("--llama-perplexity", type=Path)
+    ds.add_argument("--corpus", type=Path)
+    ds.add_argument("--prompt-tokens", type=int, default=128)
+    ds.add_argument("--gen-tokens", type=int, default=64)
+    ds.add_argument("--repetitions", type=int, default=3)
+    ds.add_argument("--threads", type=int)
+    ds.add_argument("--n-gpu-layers", type=int, default=0)
+    ds.add_argument("--context-size", type=int, default=512)
+    ds.add_argument("--timeout", type=int, default=1800)
+    ds.add_argument("--max-perplexity-ratio", type=float, default=1.10)
+    ds.add_argument("--max-kl-divergence", type=float)
+    ds.add_argument("--min-same-top-p", type=float)
+    ds.add_argument("--min-prompt-processing-speedup", type=float)
+    ds.add_argument("--min-generation-speedup", type=float)
+    ds.add_argument("--fail-on-gate", action="store_true")
+    ds.set_defaults(func=cmd_distill)
 
     b = sub.add_parser("benchmark", help="honest dense-vs-factorized CPU benchmark")
     b.add_argument("--size", type=int, default=2048)
