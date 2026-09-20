@@ -105,7 +105,9 @@ def next_refinement_ratio(
     if bracket is None:
         return None
     fail_ratio, pass_ratio = bracket
-    if pass_ratio - fail_ratio <= cfg.tolerance:
+    # Float-safe tolerance check: decimal ratios such as 0.85 - 0.84 can
+    # become 0.010000000000000009 in binary floating point.
+    if pass_ratio - fail_ratio <= cfg.tolerance + 1e-12:
         return None
     mid = _ratio_key((fail_ratio + pass_ratio) / 2.0)
     seen = {_ratio_key(float(row["target_ratio"])) for row in evaluations}
@@ -280,24 +282,13 @@ def run_v8_behavioral_budget(
         cache[ratio] = record
         return record
 
-    # Stage 1: coarse descending sweep. Stop after the first observed PASS->FAIL
-    # boundary, because refinement will spend the remaining model executions
-    # where they are most informative.
-    last_pass: float | None = None
-    bracket_found = False
+    # Stage 1: evaluate the complete coarse grid. Do NOT stop at the first
+    # PASS->FAIL transition: global budget allocation is discrete, so measured
+    # model behavior is not guaranteed to be perfectly monotonic in ratio.
+    # A smaller budget can select a different rank/residual combination and
+    # occasionally recover behavior that a nearby larger budget lost.
     for ratio in coarse_ratios(search_cfg):
-        row = evaluate_ratio(ratio, "coarse")
-        if row.get("strict_pass") is True:
-            last_pass = ratio
-            continue
-        if last_pass is not None and ratio < last_pass:
-            bracket_found = True
-            break
-
-    # If no failure was observed after a pass, make sure the minimum ratio was
-    # evaluated; the coarse generator normally already does this.
-    if not bracket_found and _ratio_key(search_cfg.min_ratio) not in cache:
-        evaluate_ratio(search_cfg.min_ratio, "coarse-edge")
+        evaluate_ratio(ratio, "coarse")
 
     # Stage 2: adaptive bisection of the behavioral boundary.
     refinements = 0
