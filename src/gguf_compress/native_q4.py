@@ -23,6 +23,8 @@ B_SCALE_SUFFIX = ".__gguf_lr_q4_b_scale"
 R_COLS_SUFFIX = ".__gguf_lr_res_cols"
 R_VALUES_SUFFIX = ".__gguf_lr_res_values"
 R_SCALES_SUFFIX = ".__gguf_lr_res_scales"
+GQ4_DATA_SUFFIX = ".__omega_gq4_data"
+GQ4_SCALE_SUFFIX = ".__omega_gq4_scale"
 
 
 @dataclass(frozen=True)
@@ -100,6 +102,25 @@ def export_native_q4_gguf(input_path: str | os.PathLike[str], output_path: str |
             t = tensors[name]
             writer.add_tensor(name, t.data, raw_dtype=t.tensor_type, tensor_endianess=reader.endianess)
             passthrough += 1
+            continue
+
+        if entry["kind"] == "group_q4":
+            if not is_native_linear_name(name):
+                raise ValueError(f"GROUP_Q4 selected unsupported runtime tensor: {name}")
+            data = np.array(tensors[entry["data"]].data, copy=True).astype(np.int8, copy=False)
+            scales = np.array(tensors[entry["scales"]].data, copy=True).astype(np.float16, copy=False)
+            writer.add_tensor(name, np.zeros((1, 1), dtype=np.float32))
+            writer.add_tensor(name + GQ4_DATA_SUFFIX, np.ascontiguousarray(data, dtype=np.int8))
+            writer.add_tensor(name + GQ4_SCALE_SUFFIX, np.ascontiguousarray(scales, dtype=np.float16))
+            out_manifest["layers"].append({
+                "name": name,
+                "kind": "group_q4",
+                "shape": entry["shape"],
+                "group_size": int(entry["group_size"]),
+                "rel_rmse": entry.get("rel_rmse"),
+                "activation_rel_rmse": entry.get("activation_rel_rmse"),
+            })
+            q4_layers += 1
             continue
 
         if entry.get("qbits") != 4 or not is_native_linear_name(name):
