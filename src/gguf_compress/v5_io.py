@@ -11,6 +11,7 @@ import numpy as np
 from .activation import ActivationCalibration, uniform_second_moment
 from .gguf_io import _copy_metadata, _gguf, _tensor_float32
 from .optimizer import CandidateScan, GlobalPlan, build_matrix_variant
+from .group_q4 import quantize_group_q4
 from .v3_io import (
     V3_CUSTOM_ARCH,
     V3_FORMAT_VERSION,
@@ -147,6 +148,39 @@ def compress_gguf_v5(
                 raise RuntimeError(f"missing activation calibration for selected tensor: {tensor.name}")
             second = uniform_second_moment(shape[1])
 
+        if choice.kind == "group_q4":
+            if choice.group_size is None:
+                raise RuntimeError(f"GROUP_Q4 choice is missing group_size: {tensor.name}")
+            q = quantize_group_q4(w, group_size=choice.group_size)
+            base = f"__gguf_compress_v3__.{idx}"
+            data_name = f"{base}.gq4_data"
+            scale_name = f"{base}.gq4_scale"
+            writer.add_tensor(data_name, np.ascontiguousarray(q.data, dtype=np.int8))
+            writer.add_tensor(scale_name, np.ascontiguousarray(q.scales, dtype=np.float16))
+            entry = {
+                "name": tensor.name,
+                "kind": "group_q4",
+                "shape": list(shape),
+                "original_type": tensor.tensor_type.name,
+                "group_size": choice.group_size,
+                "data": data_name,
+                "scales": scale_name,
+                "rel_rmse": choice.rel_rmse,
+                "activation_rel_rmse": choice.activation_rel_rmse,
+                "activation_distortion_energy": choice.distortion_energy,
+                "activation_reference_energy": choice.reference_energy,
+                "calibration_source": choice.calibration_source,
+            }
+            v3_manifest["tensors"].append(entry)
+            v5_manifest["tensors"].append(entry)
+            v5_manifest["choices"][tensor.name] = choice.to_dict()
+            factor_count += 1
+            rel_errors.append(choice.rel_rmse)
+            activation_errors.append(choice.activation_rel_rmse)
+            continue
+
+        if choice.kind != "factorized":
+            raise RuntimeError(f"unsupported V5 choice kind={choice.kind!r} for {tensor.name}")
         assert choice.rank is not None
         variant = build_matrix_variant(
             w,
