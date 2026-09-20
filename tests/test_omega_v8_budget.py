@@ -48,3 +48,18 @@ def test_refinement_uses_midpoint_until_tolerance() -> None:
         {"target_ratio": 0.85, "strict_pass": True},
     ])
     assert next_refinement_ratio(rows, cfg) is None
+
+
+def test_tolerance_is_float_safe() -> None:
+    cfg = AdaptiveSearchConfig(
+        min_ratio=0.50,
+        max_ratio=0.98,
+        coarse_step=0.08,
+        tolerance=0.01,
+        max_refinements=8,
+    )
+    rows = [
+        {"target_ratio": 0.84, "strict_pass": False},
+        {"target_ratio": 0.85, "strict_pass": True},
+    ]
+    assert next_refinement_ratio(rows, cfg) is None
