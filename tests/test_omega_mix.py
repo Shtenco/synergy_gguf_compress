@@ -92,3 +92,56 @@ def test_group_q4_candidate_is_allowed_for_cheap_tensor() -> None:
     filtered, _ = apply_omega_policy(scan, OmegaConfig())
     ids = {x.candidate_id for x in filtered.candidates[name]}
     assert "gq4-g32" in ids
+
+def test_group_q4_can_cover_protected_ffn_but_not_attention_qk() -> None:
+    protected_name = "blk.10.ffn_gate.weight"
+    q_name = "blk.10.attn_q.weight"
+
+    def group(name: str, rmse: float) -> TensorCandidate:
+        return TensorCandidate(
+            tensor_name=name,
+            candidate_id="gq4-g32",
+            kind="group_q4",
+            rank=None,
+            residual_density=0.0,
+            estimated_bytes=70,
+            rel_rmse=rmse,
+            activation_rel_rmse=rmse,
+            distortion_energy=rmse * rmse * 100.0,
+            reference_energy=100.0,
+            calibration_source="activation",
+            group_size=32,
+        )
+
+    def raw(name: str) -> TensorCandidate:
+        return TensorCandidate(
+            tensor_name=name,
+            candidate_id="raw",
+            kind="raw",
+            rank=None,
+            residual_density=0.0,
+            estimated_bytes=100,
+            rel_rmse=0.0,
+            activation_rel_rmse=0.0,
+            distortion_energy=0.0,
+            reference_energy=100.0,
+            calibration_source="activation",
+        )
+
+    scan = CandidateScan(
+        candidates={
+            protected_name: [group(protected_name, 0.10), raw(protected_name)],
+            q_name: [group(q_name, 0.10), raw(q_name)],
+        },
+        fixed_payload_bytes=0,
+        original_payload_bytes=200,
+        optimizable_raw_bytes=200,
+        calibrated_tensors=2,
+        fallback_tensors=0,
+        skipped_tensors=0,
+    )
+    filtered, classes = apply_omega_policy(scan, OmegaConfig())
+    assert classes[protected_name] == "protected"
+    assert "gq4-g32" in {x.candidate_id for x in filtered.candidates[protected_name]}
+    assert classes[q_name] == "critical"
+    assert "gq4-g32" not in {x.candidate_id for x in filtered.candidates[q_name]}
