@@ -1,0 +1,83 @@
+name: NEXUS Omega-MIX V7 retention search
+
+on:
+  push:
+    branches:
+      - feat/omega-mix-v7-retention-search
+  workflow_dispatch:
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e '.[dev]'
+      - run: pytest -q tests/test_omega_v7_search.py
+
+  qwen-v7:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      LLAMA_COMMIT: 5f436dddb440a288ee5611d7d1eca564a6aca9f4
+      HF_HUB_DISABLE_XET: "1"
+      HF_MODEL: Qwen/Qwen2.5-0.5B-Instruct
+      GGUF_URL: https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf?download=true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install project
+        run: |
+          python -m pip install -U pip
+          python -m pip install -e '.[dev,calibrate]'
+      - name: Checkout pinned llama.cpp
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/llama.cpp
+          ref: ${{ env.LLAMA_COMMIT }}
+          path: llama.cpp
+          fetch-depth: 1
+      - name: Patch and build runtime
+        run: |
+          python llama_cpp_v3/apply_patch.py llama.cpp
+          cmake -S llama.cpp -B llama.cpp/build             -DCMAKE_BUILD_TYPE=Release             -DLLAMA_CURL=OFF             -DLLAMA_BUILD_TESTS=OFF             -DLLAMA_BUILD_EXAMPLES=ON             -DLLAMA_BUILD_SERVER=ON
+          cmake --build llama.cpp/build --target llama-server -j2
+      - name: Download source and corpus
+        run: |
+          mkdir -p e2e
+          curl -L --fail --retry 5 "$GGUF_URL" -o e2e/source.gguf
+          curl -L --fail --retry 5             https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt             -o e2e/corpus.txt
+      - name: Capture activation stats
+        run: |
+          gguf-compress calibrate-hf             "$HF_MODEL" e2e/corpus.txt e2e/activation.npz             --max-samples 6 --max-length 192 --device cpu
+      - name: Run V7 retention search
+        run: |
+          python -m gguf_compress.omega_v7_search             --server llama.cpp/build/bin/llama-server             --baseline e2e/source.gguf             --activation-stats e2e/activation.npz             --questions benchmarks/intelligence_core_40.jsonl             --output-dir e2e/v7             --target-ratios 0.98,0.95,0.90,0.85,0.80,0.75,0.70,0.65,0.60             --ranks 8,16,32,64,128             --residual-densities 0,0.0025,0.01,0.03             --threads 4             | tee e2e/v7-console.json
+      - name: Enforce strict candidate
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path("e2e/v7/omega-v7-retention-search.json")
+          r = json.loads(p.read_text())
+          print("BASELINE", r["baseline"])
+          print("VERDICT", r["verdict"])
+          print("SELECTED", r["selected"])
+          if r["verdict"] != "PASS":
+              raise SystemExit(2)
+          PY
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nexus-omega-v7-retention-search
+          path: |
+            e2e/v7/*.json
+            e2e/v7/candidates/*.json
+            e2e/v7/candidates/*.gguf
+          if-no-files-found: warn
+          retention-days: 14
