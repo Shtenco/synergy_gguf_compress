@@ -50,3 +50,45 @@ def test_critical_tensor_rejects_damaging_cheap_candidate() -> None:
     assert "tiny-bad" not in ids
     assert "protected" in ids
     assert "raw" in ids
+
+def test_group_q4_candidate_is_allowed_for_cheap_tensor() -> None:
+    name = "blk.10.ffn_up.weight"
+    group = TensorCandidate(
+        tensor_name=name,
+        candidate_id="gq4-g32",
+        kind="group_q4",
+        rank=None,
+        residual_density=0.0,
+        estimated_bytes=70,
+        rel_rmse=0.10,
+        activation_rel_rmse=0.10,
+        distortion_energy=1.0,
+        reference_energy=100.0,
+        calibration_source="activation",
+        group_size=32,
+    )
+    raw = TensorCandidate(
+        tensor_name=name,
+        candidate_id="raw",
+        kind="raw",
+        rank=None,
+        residual_density=0.0,
+        estimated_bytes=100,
+        rel_rmse=0.0,
+        activation_rel_rmse=0.0,
+        distortion_energy=0.0,
+        reference_energy=100.0,
+        calibration_source="activation",
+    )
+    scan = CandidateScan(
+        candidates={name: [group, raw]},
+        fixed_payload_bytes=0,
+        original_payload_bytes=100,
+        optimizable_raw_bytes=100,
+        calibrated_tensors=1,
+        fallback_tensors=0,
+        skipped_tensors=0,
+    )
+    filtered, _ = apply_omega_policy(scan, OmegaConfig())
+    ids = {x.candidate_id for x in filtered.candidates[name]}
+    assert "gq4-g32" in ids
