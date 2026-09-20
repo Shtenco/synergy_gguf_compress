@@ -14,6 +14,7 @@ from .codec import _randomized_lowrank
 from .native import is_native_linear_name
 from .quant import QuantizedRows, dequantize_rows, quantize_rows
 from .residual import SparseRowResidual, build_sparse_row_residual
+from .group_q4 import dequantize_group_q4, quantize_group_q4
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,7 @@ class TensorCandidate:
     distortion_energy: float
     reference_energy: float
     calibration_source: str
+    group_size: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -190,6 +192,7 @@ def build_tensor_candidates(
     oversample: int,
     power_iters: int,
     max_activation_rel_rmse: float | None = None,
+    group_q4_sizes: tuple[int, ...] = (),
 ) -> list[TensorCandidate]:
     w = np.asarray(weight, dtype=np.float32)
     if w.ndim != 2:
@@ -257,6 +260,37 @@ def build_tensor_candidates(
                 )
             )
 
+    for group_size in sorted({int(g) for g in group_q4_sizes if int(g) >= 2}):
+        q = quantize_group_q4(w, group_size=group_size)
+        rec = dequantize_group_q4(q)
+        diff = w - rec
+        std_ref = float(np.sum(w * w, dtype=np.float64))
+        std_diff = float(np.sum(diff * diff, dtype=np.float64))
+        distortion = float(np.sum((diff * diff) * s[None, :], dtype=np.float64))
+        act_rel = math.sqrt(distortion / max(reference_energy, 1e-30))
+        rel = math.sqrt(std_diff / max(std_ref, 1e-30))
+        if max_activation_rel_rmse is not None and act_rel > max_activation_rel_rmse:
+            continue
+        estimated = int(q.payload_nbytes + 4)
+        if estimated >= int(raw_bytes):
+            continue
+        candidates.append(
+            TensorCandidate(
+                tensor_name=tensor_name,
+                candidate_id=f"gq4-g{group_size}",
+                kind="group_q4",
+                rank=None,
+                residual_density=0.0,
+                estimated_bytes=estimated,
+                rel_rmse=rel,
+                activation_rel_rmse=act_rel,
+                distortion_energy=distortion,
+                reference_energy=reference_energy,
+                calibration_source=calibration_source,
+                group_size=group_size,
+            )
+        )
+
     return _pareto_prune_candidates(candidates)
 
 
@@ -287,6 +321,7 @@ def scan_gguf_candidates(
     power_iters: int = 1,
     require_calibration: bool = True,
     max_activation_rel_rmse: float | None = 0.50,
+    group_q4_sizes: tuple[int, ...] = (),
 ) -> CandidateScan:
     from .gguf_io import _gguf, _tensor_float32
 
@@ -343,6 +378,7 @@ def scan_gguf_candidates(
             oversample=oversample,
             power_iters=power_iters,
             max_activation_rel_rmse=max_activation_rel_rmse,
+            group_q4_sizes=group_q4_sizes,
         )
         if len(options) <= 1:
             fixed += raw_bytes
