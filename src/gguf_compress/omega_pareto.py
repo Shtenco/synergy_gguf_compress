@@ -28,6 +28,7 @@ def run_omega_pareto(
     qbits: int = 4,
     min_elements: int = 131072,
     max_activation_rel_rmse: float = 0.60,
+    group_q4_sizes: tuple[int, ...] = (16, 32, 64),
     omega_config: OmegaConfig | None = None,
 ) -> dict[str, Any]:
     source = Path(input_model).resolve()
@@ -48,6 +49,7 @@ def run_omega_pareto(
         power_iters=1,
         require_calibration=True,
         max_activation_rel_rmse=max_activation_rel_rmse,
+        group_q4_sizes=group_q4_sizes,
     )
     scan, classes = apply_omega_policy(base_scan, cfg)
     plans = build_pareto_plans(scan, target_ratios)
@@ -112,6 +114,7 @@ def run_omega_pareto(
         "ranks": list(ranks),
         "residual_densities": list(residual_densities),
         "target_ratios": list(target_ratios),
+        "group_q4_sizes": list(group_q4_sizes),
         "scan": {
             "fixed_payload_bytes": scan.fixed_payload_bytes,
             "original_payload_bytes": scan.original_payload_bytes,
@@ -146,6 +149,7 @@ def main() -> None:
     ap.add_argument("--ranks", default="8,16,32,64,128")
     ap.add_argument("--residual-densities", default="0,0.0025,0.01,0.03")
     ap.add_argument("--min-elements", type=int, default=131072)
+    ap.add_argument("--group-q4-sizes", default="16,32,64")
     args = ap.parse_args()
 
     report = run_omega_pareto(
@@ -156,6 +160,7 @@ def main() -> None:
         ranks=_ints(args.ranks),
         residual_densities=_floats(args.residual_densities),
         min_elements=args.min_elements,
+        group_q4_sizes=_ints(args.group_q4_sizes),
     )
     print(json.dumps(report, indent=2, ensure_ascii=False))
 
