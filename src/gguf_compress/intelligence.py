@@ -34,7 +34,7 @@ def _post_json(url: str, payload: dict[str, Any], timeout: float = 120.0) -> dic
 
 
 @contextmanager
-def llama_server(binary: str | Path, model: str | Path, *, threads: int = 4, context: int = 1024):
+def llama_server(binary: str | Path, model: str | Path, *, threads: int = 1, context: int = 1024):
     port = _free_port()
     log_path = Path(str(model) + ".server.log")
     log = log_path.open("w", encoding="utf-8")
@@ -46,6 +46,10 @@ def llama_server(binary: str | Path, model: str | Path, *, threads: int = 4, con
             "--port", str(port),
             "-t", str(threads),
             "-c", str(context),
+            "-np", "1",
+            "--no-cache-prompt",
+            "--no-cache-idle-slots",
+            "--slot-prompt-similarity", "0",
             "--no-webui",
         ],
         stdout=log,
@@ -117,6 +121,7 @@ def run_model(
             "temperature": 0,
             "max_tokens": 4,
             "seed": 12345,
+            "cache_prompt": False,
         }
         response = _post_json(f"{base_url}/v1/chat/completions", payload)
         content = response["choices"][0]["message"]["content"]
@@ -162,7 +167,7 @@ def run_intelligence_benchmark(
     questions_path: str | Path,
     output_path: str | Path,
     limit: int | None = None,
-    threads: int = 4,
+    threads: int = 1,
 ) -> dict[str, Any]:
     questions = [
         json.loads(line)
@@ -202,20 +207,45 @@ def run_intelligence_benchmark(
             "candidate_correct": c["correct"],
         })
 
+    accuracy_delta = candidate["accuracy"] - baseline["accuracy"]
+    retention = retained / max(baseline_correct, 1)
+    strict_pass = (
+        retention == 1.0
+        and regressions == 0
+        and accuracy_delta >= 0.0
+        and baseline["unparsed"] == 0
+        and candidate["unparsed"] == 0
+    )
+
     report = {
-        "format": "gguf_compress.intelligence/v1",
+        "format": "gguf_compress.intelligence/v2",
         "benchmark": "NEXUS Core MCQ-40",
-        "note": "Focused smoke benchmark, not a replacement for MMLU/ARC/GSM8K.",
+        "note": "Focused paired retention gate, not a replacement for MMLU/ARC/GSM8K.",
+        "runtime_protocol": {
+            "threads": threads,
+            "parallel_slots": 1,
+            "prompt_cache": False,
+            "slot_prompt_similarity": 0,
+            "temperature": 0,
+            "seed": 12345,
+        },
         "baseline_model": str(Path(baseline_model).resolve()),
         "candidate_model": str(Path(candidate_model).resolve()),
         "baseline": baseline,
         "candidate": candidate,
         "comparison": {
-            "accuracy_delta": candidate["accuracy"] - baseline["accuracy"],
+            "accuracy_delta": accuracy_delta,
             "answer_agreement": agreements / max(len(paired), 1),
-            "baseline_correct_retention": retained / max(baseline_correct, 1),
+            "baseline_correct_retention": retention,
             "regressions": regressions,
             "improvements": improvements,
+        },
+        "strict_gate": {
+            "baseline_correct_retention_required": 1.0,
+            "regressions_required": 0,
+            "accuracy_delta_min": 0.0,
+            "unparsed_required": 0,
+            "pass": strict_pass,
         },
         "paired": paired,
         "baseline_rows": baseline_rows,
@@ -233,7 +263,7 @@ def main() -> None:
     ap.add_argument("--questions", required=True)
     ap.add_argument("--output", required=True)
     ap.add_argument("--limit", type=int)
-    ap.add_argument("--threads", type=int, default=4)
+    ap.add_argument("--threads", type=int, default=1)
     args = ap.parse_args()
     report = run_intelligence_benchmark(
         server_binary=args.server,
