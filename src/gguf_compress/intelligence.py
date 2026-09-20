@@ -159,45 +159,41 @@ def _summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def run_intelligence_benchmark(
-    *,
-    server_binary: str | Path,
-    baseline_model: str | Path,
-    candidate_model: str | Path,
-    questions_path: str | Path,
-    output_path: str | Path,
-    limit: int | None = None,
-    threads: int = 1,
+def _balanced_antibias_questions(questions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    letters = "ABCD"
+    out: list[dict[str, Any]] = []
+    for index, item in enumerate(questions):
+        target = letters[index % 4]
+        original_gold = item["answer"]
+        original_index = letters.index(original_gold)
+        target_index = letters.index(target)
+        shift = (original_index - target_index) % 4
+        rotated = letters[shift:] + letters[:shift]
+        clone = dict(item)
+        clone["choices"] = {
+            letters[j]: item["choices"][rotated[j]]
+            for j in range(4)
+        }
+        clone["answer"] = letters[rotated.index(original_gold)]
+        clone["anti_bias_shift"] = shift
+        out.append(clone)
+    return out
+
+
+def _compare_rows(
+    baseline_rows: list[dict[str, Any]],
+    candidate_rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    questions = [
-        json.loads(line)
-        for line in Path(questions_path).read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
-    if limit is not None:
-        questions = questions[:limit]
-
-    with llama_server(server_binary, baseline_model, threads=threads) as url:
-        baseline_rows = run_model(url, questions)
-    with llama_server(server_binary, candidate_model, threads=threads) as url:
-        candidate_rows = run_model(url, questions)
-
-    baseline = _summary(baseline_rows)
-    candidate = _summary(candidate_rows)
     paired = []
     regressions = improvements = agreements = 0
-    baseline_correct = 0
-    retained = 0
+    baseline_correct = retained = 0
     for b, c in zip(baseline_rows, candidate_rows, strict=True):
-        if b["answer"] == c["answer"]:
-            agreements += 1
+        agreements += int(b["answer"] == c["answer"])
         if b["correct"]:
             baseline_correct += 1
             retained += int(c["correct"])
-        if b["correct"] and not c["correct"]:
-            regressions += 1
-        if not b["correct"] and c["correct"]:
-            improvements += 1
+        regressions += int(b["correct"] and not c["correct"])
+        improvements += int((not b["correct"]) and c["correct"])
         paired.append({
             "id": b["id"],
             "gold": b["gold"],
@@ -207,6 +203,8 @@ def run_intelligence_benchmark(
             "candidate_correct": c["correct"],
         })
 
+    baseline = _summary(baseline_rows)
+    candidate = _summary(candidate_rows)
     accuracy_delta = candidate["accuracy"] - baseline["accuracy"]
     retention = retained / max(baseline_correct, 1)
     strict_pass = (
@@ -216,21 +214,7 @@ def run_intelligence_benchmark(
         and baseline["unparsed"] == 0
         and candidate["unparsed"] == 0
     )
-
-    report = {
-        "format": "gguf_compress.intelligence/v2",
-        "benchmark": "NEXUS Core MCQ-40",
-        "note": "Focused paired retention gate, not a replacement for MMLU/ARC/GSM8K.",
-        "runtime_protocol": {
-            "threads": threads,
-            "parallel_slots": 1,
-            "prompt_cache": False,
-            "slot_prompt_similarity": 0,
-            "temperature": 0,
-            "seed": 12345,
-        },
-        "baseline_model": str(Path(baseline_model).resolve()),
-        "candidate_model": str(Path(candidate_model).resolve()),
+    return {
         "baseline": baseline,
         "candidate": candidate,
         "comparison": {
@@ -251,9 +235,81 @@ def run_intelligence_benchmark(
         "baseline_rows": baseline_rows,
         "candidate_rows": candidate_rows,
     }
+
+
+def run_intelligence_benchmark(
+    *,
+    server_binary: str | Path,
+    baseline_model: str | Path,
+    candidate_model: str | Path,
+    questions_path: str | Path,
+    output_path: str | Path,
+    limit: int | None = None,
+    threads: int = 1,
+    anti_bias: bool = True,
+) -> dict[str, Any]:
+    questions = [
+        json.loads(line)
+        for line in Path(questions_path).read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    if limit is not None:
+        questions = questions[:limit]
+
+    with llama_server(server_binary, baseline_model, threads=threads) as url:
+        baseline_rows = run_model(url, questions)
+    with llama_server(server_binary, candidate_model, threads=threads) as url:
+        candidate_rows = run_model(url, questions)
+    primary = _compare_rows(baseline_rows, candidate_rows)
+
+    anti_bias_result: dict[str, Any] | None = None
+    if anti_bias:
+        anti_questions = _balanced_antibias_questions(questions)
+        with llama_server(server_binary, baseline_model, threads=threads) as url:
+            anti_baseline_rows = run_model(url, anti_questions)
+        with llama_server(server_binary, candidate_model, threads=threads) as url:
+            anti_candidate_rows = run_model(url, anti_questions)
+        anti_bias_result = _compare_rows(anti_baseline_rows, anti_candidate_rows)
+
+    strict_pass = bool(primary["strict_gate"]["pass"]) and (
+        anti_bias_result is None or bool(anti_bias_result["strict_gate"]["pass"])
+    )
+    agreements = [float(primary["comparison"]["answer_agreement"])]
+    if anti_bias_result is not None:
+        agreements.append(float(anti_bias_result["comparison"]["answer_agreement"]))
+
+    report = {
+        "format": "gguf_compress.intelligence/v3",
+        "benchmark": "NEXUS Core MCQ-40",
+        "note": (
+            "Paired retention gate with deterministic no-cache inference and "
+            "balanced anti-bias permutation. Not a replacement for MMLU/ARC/GSM8K."
+        ),
+        "baseline_model": str(Path(baseline_model).resolve()),
+        "candidate_model": str(Path(candidate_model).resolve()),
+        "runtime_protocol": {
+            "threads": threads,
+            "parallel_slots": 1,
+            "prompt_cache": False,
+            "slot_prompt_similarity": 0,
+            "temperature": 0,
+            "seed": 12345,
+        },
+        "primary": primary,
+        "balanced_anti_bias": anti_bias_result,
+        "strict_gate": {
+            "pass": strict_pass,
+            "requires_primary_pass": True,
+            "requires_balanced_anti_bias_pass": anti_bias,
+        },
+        "behavior_identity": {
+            "minimum_answer_agreement": min(agreements),
+            "pass_95pct": min(agreements) >= 0.95,
+            "note": "Diagnostic only; not part of the legacy strict retention gate.",
+        },
+    }
     Path(output_path).write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
     return report
-
 
 def main() -> None:
     ap = argparse.ArgumentParser()
@@ -264,6 +320,7 @@ def main() -> None:
     ap.add_argument("--output", required=True)
     ap.add_argument("--limit", type=int)
     ap.add_argument("--threads", type=int, default=1)
+    ap.add_argument("--no-anti-bias", action="store_true")
     args = ap.parse_args()
     report = run_intelligence_benchmark(
         server_binary=args.server,
@@ -273,6 +330,7 @@ def main() -> None:
         output_path=args.output,
         limit=args.limit,
         threads=args.threads,
+        anti_bias=not args.no_anti_bias,
     )
     print(json.dumps(report, indent=2, ensure_ascii=False))
 
