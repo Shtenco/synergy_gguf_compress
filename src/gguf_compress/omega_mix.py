@@ -90,10 +90,26 @@ def classify_tensor(name: str, *, max_layer: int | None = None) -> OmegaClass:
 def _allowed(candidate: TensorCandidate, cls: OmegaClass, cfg: OmegaConfig) -> bool:
     if candidate.kind == "raw":
         return True
-    rank = int(candidate.rank or 0)
 
     if cls is OmegaClass.AUTHORITY:
         return False
+
+    # Direct GROUP_Q4 is a full-matrix representation, not a low-rank factorization,
+    # so rank/residual guards do not apply to it. Q/K stay explicitly protected:
+    # they may only use the older protected factorized path or remain raw.
+    if candidate.kind == "group_q4":
+        lower = candidate.tensor_name.lower()
+        if any(f".{role}." in lower for role in ("attn_q", "attn_k")):
+            return False
+        if cls is OmegaClass.CRITICAL:
+            return candidate.activation_rel_rmse <= cfg.critical_max_activation_rmse
+        if cls is OmegaClass.PROTECTED:
+            return candidate.activation_rel_rmse <= cfg.protected_max_activation_rmse
+        if cls is OmegaClass.NORMAL:
+            return candidate.activation_rel_rmse <= cfg.normal_max_activation_rmse
+        return candidate.activation_rel_rmse <= cfg.cheap_max_activation_rmse
+
+    rank = int(candidate.rank or 0)
     if cls is OmegaClass.CRITICAL:
         return (
             rank >= cfg.critical_min_rank
