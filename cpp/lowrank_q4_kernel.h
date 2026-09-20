@@ -26,12 +26,27 @@ inline void direct_group_q4(
         const float * xn = x + size_t(n) * in_features;
         float * yn = y + size_t(n) * out_features;
         for (int o = 0; o < out_features; ++o) {
-            const int8_t * row = q4_data + size_t(o) * packed_stride;
+            const uint8_t * row = reinterpret_cast<const uint8_t *>(q4_data + size_t(o) * packed_stride);
             const uint16_t * row_scales = scales_f16 + size_t(o) * groups;
             float sum = 0.0f;
-            for (int i = 0; i < in_features; ++i) {
-                const float scale = fp16_to_fp32(row_scales[i / group_size]);
-                sum += xn[i] * float(q4_at(row, i)) * scale;
+            for (int g = 0; g < groups; ++g) {
+                const int begin = g * group_size;
+                const int end = begin + group_size < in_features ? begin + group_size : in_features;
+                const float scale = fp16_to_fp32(row_scales[g]);
+                float group_sum = 0.0f;
+                int i = begin;
+                for (; i + 1 < end; i += 2) {
+                    const uint8_t byte = row[i >> 1];
+                    const float q0 = float(int(byte & 0x0fu) - 8);
+                    const float q1 = float(int(byte >> 4) - 8);
+                    group_sum += xn[i] * q0 + xn[i + 1] * q1;
+                }
+                if (i < end) {
+                    const uint8_t byte = row[i >> 1];
+                    const float q0 = float(int(byte & 0x0fu) - 8);
+                    group_sum += xn[i] * q0;
+                }
+                sum += group_sum * scale;
             }
             yn[o] = sum;
         }
