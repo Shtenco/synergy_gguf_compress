@@ -1,0 +1,181 @@
+{
+  "format": "gguf_compress.functional_safety/v1",
+  "model": {
+    "name": "Qwen2.5-0.5B-Instruct Q8_0",
+    "source_sha256": "ca59ca7f13d0e15a8cfa77bd17e65d24f6844b554a7b6c12e07a5f89ff76844e",
+    "source_bytes": 675710816
+  },
+  "candidate": {
+    "name": "Omega-MIX empirical safe7",
+    "sha256": "a8dd50edce52753bf4f6c53ad839c7c652e3b9357cb8d1ddd51c2197bfe2a5e0",
+    "bytes": 668358528,
+    "saved_bytes": 7352288,
+    "reduction_pct": 1.0880820353776903,
+    "layers": [
+      [
+        "blk.23.ffn_up.weight",
+        "gq4-g4"
+      ],
+      [
+        "blk.23.ffn_gate.weight",
+        "gq4-g8"
+      ],
+      [
+        "blk.22.ffn_up.weight",
+        "gq4-g4"
+      ],
+      [
+        "blk.22.ffn_gate.weight",
+        "gq4-g8"
+      ],
+      [
+        "blk.21.ffn_gate.weight",
+        "gq4-g8"
+      ],
+      [
+        "blk.20.ffn_gate.weight",
+        "gq4-g8"
+      ],
+      [
+        "blk.19.ffn_gate.weight",
+        "gq4-g8"
+      ]
+    ]
+  },
+  "benchmark": {
+    "protocol": "temperature=0, seed=12345, t=1, np=1, no prompt cache",
+    "primary": {
+      "baseline_correct": 6,
+      "candidate_correct": 6,
+      "retention": 1,
+      "regressions": 0,
+      "improvements": 0,
+      "answer_agreement": 0.975,
+      "unparsed": 0
+    },
+    "balanced_anti_bias": {
+      "baseline_correct": 13,
+      "candidate_correct": 14,
+      "retention": 1,
+      "regressions": 0,
+      "improvements": 1,
+      "answer_agreement": 0.95,
+      "unparsed": 0
+    },
+    "double_strict_gate_pass": true
+  },
+  "records": [
+    {
+      "tensor_name": "blk.23.ffn_up.weight",
+      "candidate_id": "gq4-g4",
+      "pass": true,
+      "source": "safe7 double gate",
+      "baseline_correct_retention": 1,
+      "regressions": 0
+    },
+    {
+      "tensor_name": "blk.23.ffn_up.weight",
+      "candidate_id": "gq4-g8",
+      "pass": false,
+      "source": "balanced anti-bias",
+      "reason": "q34 regression"
+    },
+    {
+      "tensor_name": "blk.23.ffn_up.weight",
+      "candidate_id": "gq4-g16",
+      "pass": false,
+      "source": "balanced anti-bias",
+      "reason": "q28 regression"
+    },
+    {
+      "tensor_name": "blk.23.ffn_up.weight",
+      "candidate_id": "gq4-g32",
+      "pass": false,
+      "source": "balanced anti-bias",
+      "reason": "q28 regression"
+    },
+    {
+      "tensor_name": "blk.23.ffn_gate.weight",
+      "candidate_id": "gq4-g8",
+      "pass": true,
+      "source": "19-question double-correct gate",
+      "baseline_correct_retention": 1,
+      "regressions": 0
+    },
+    {
+      "tensor_name": "blk.22.ffn_up.weight",
+      "candidate_id": "gq4-g4",
+      "pass": true,
+      "source": "19-question double-correct gate",
+      "baseline_correct_retention": 1,
+      "regressions": 0
+    },
+    {
+      "tensor_name": "blk.22.ffn_up.weight",
+      "candidate_id": "gq4-g8",
+      "pass": false,
+      "source": "balanced anti-bias",
+      "reason": "q28 regression"
+    },
+    {
+      "tensor_name": "blk.22.ffn_gate.weight",
+      "candidate_id": "gq4-g8",
+      "pass": true,
+      "source": "19-question double-correct gate",
+      "baseline_correct_retention": 1,
+      "regressions": 0
+    },
+    {
+      "tensor_name": "blk.21.ffn_up.weight",
+      "candidate_id": "gq4-g8",
+      "pass": false,
+      "source": "balanced anti-bias",
+      "reason": "q28 regression"
+    },
+    {
+      "tensor_name": "blk.21.ffn_up.weight",
+      "candidate_id": "gq4-g4",
+      "pass": false,
+      "source": "balanced anti-bias",
+      "reason": "q28 regression"
+    },
+    {
+      "tensor_name": "blk.21.ffn_gate.weight",
+      "candidate_id": "gq4-g8",
+      "pass": true,
+      "source": "19-question double-correct gate",
+      "baseline_correct_retention": 1,
+      "regressions": 0
+    },
+    {
+      "tensor_name": "blk.20.ffn_gate.weight",
+      "candidate_id": "gq4-g8",
+      "pass": true,
+      "source": "19-question double-correct gate",
+      "baseline_correct_retention": 1,
+      "regressions": 0
+    },
+    {
+      "tensor_name": "blk.19.ffn_gate.weight",
+      "candidate_id": "gq4-g8",
+      "pass": true,
+      "source": "19-question double-correct gate",
+      "baseline_correct_retention": 1,
+      "regressions": 0
+    },
+    {
+      "tensor_name": "blk.18.ffn_gate.weight",
+      "candidate_id": "gq4-g8",
+      "pass": false,
+      "source": "balanced anti-bias",
+      "reason": "q28 regression"
+    },
+    {
+      "tensor_name": "blk.18.ffn_gate.weight",
+      "candidate_id": "gq4-g4",
+      "pass": false,
+      "source": "balanced anti-bias",
+      "reason": "q28 regression"
+    }
+  ]
+}
