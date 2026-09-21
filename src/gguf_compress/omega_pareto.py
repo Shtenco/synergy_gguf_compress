@@ -8,6 +8,7 @@ from typing import Any
 
 from .activation import load_activation_calibration
 from .native_q4 import export_native_q4_gguf
+from .functional_safety import apply_functional_safety, load_functional_safety
 from .omega_mix import OmegaConfig, apply_omega_policy, plan_breakdown
 from .optimizer import build_pareto_plans, scan_gguf_candidates
 from .v5_io import compress_gguf_v5
@@ -28,7 +29,9 @@ def run_omega_pareto(
     qbits: int = 4,
     min_elements: int = 131072,
     max_activation_rel_rmse: float = 0.60,
-    group_q4_sizes: tuple[int, ...] = (16, 32, 64),
+    group_q4_sizes: tuple[int, ...] = (4, 8, 16, 32, 64),
+    functional_safety_map: str | Path | None = None,
+    require_known_functional_safety: bool = False,
     omega_config: OmegaConfig | None = None,
 ) -> dict[str, Any]:
     source = Path(input_model).resolve()
@@ -52,6 +55,17 @@ def run_omega_pareto(
         group_q4_sizes=group_q4_sizes,
     )
     scan, classes = apply_omega_policy(base_scan, cfg)
+    functional_safety_summary = None
+    if functional_safety_map is not None:
+        decisions, safety_payload = load_functional_safety(functional_safety_map)
+        scan, functional_safety_summary = apply_functional_safety(
+            scan, decisions, require_known=require_known_functional_safety
+        )
+        functional_safety_summary = {
+            **functional_safety_summary,
+            "path": str(Path(functional_safety_map).resolve()),
+            "model": safety_payload.get("model"),
+        }
     plans = build_pareto_plans(scan, target_ratios)
 
     points: list[dict[str, Any]] = []
@@ -115,6 +129,7 @@ def run_omega_pareto(
         "residual_densities": list(residual_densities),
         "target_ratios": list(target_ratios),
         "group_q4_sizes": list(group_q4_sizes),
+        "functional_safety": functional_safety_summary,
         "scan": {
             "fixed_payload_bytes": scan.fixed_payload_bytes,
             "original_payload_bytes": scan.original_payload_bytes,
@@ -149,7 +164,9 @@ def main() -> None:
     ap.add_argument("--ranks", default="8,16,32,64,128")
     ap.add_argument("--residual-densities", default="0,0.0025,0.01,0.03")
     ap.add_argument("--min-elements", type=int, default=131072)
-    ap.add_argument("--group-q4-sizes", default="16,32,64")
+    ap.add_argument("--group-q4-sizes", default="4,8,16,32,64")
+    ap.add_argument("--functional-safety-map")
+    ap.add_argument("--functional-safety-known-only", action="store_true")
     args = ap.parse_args()
 
     report = run_omega_pareto(
@@ -161,6 +178,8 @@ def main() -> None:
         residual_densities=_floats(args.residual_densities),
         min_elements=args.min_elements,
         group_q4_sizes=_ints(args.group_q4_sizes),
+        functional_safety_map=args.functional_safety_map,
+        require_known_functional_safety=args.functional_safety_known_only,
     )
     print(json.dumps(report, indent=2, ensure_ascii=False))
 
