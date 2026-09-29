@@ -1,172 +1,244 @@
-# 🧠 SYNERGY GGUF Compress
+# 🧠 SYNERGY GGUF Compress — verified specification dossier
 
-> **Домен:** Infrastructure / AI Model Compression  
-> **Роль:** Лаборатория компрессии GGUF/LLM-моделей в составе вычислительного слоя SYNERGY.  
-> **Статус:** 🧱 STUB / R&D — на текущем main полноценная реализация ещё не подтверждается артефактами.  
+> **Домен:** AI Model Compression  
+> **Роль:** спецификация компрессии GGUF/LLM с quality/runtime gates вместо одного ratio.  
+> **Статус:** 🧱 **STUB / specification-only** — на проверенном `main` присутствует только `README.md`; executable runtime, tests и evidence artifacts отсутствуют.  
+> **Проверено по фактическому root tree:** 29.09.2026.  
 > **Архитектурный родитель:** [`synergy_meta_os`](https://github.com/Shtenco/synergy_meta_os)
 
----
+## 1. 🎯 Проблема и граница проекта
 
-## 🎯 Задача репозитория
+Этот repository резервирует отдельную ответственность внутри SYNERGY: спецификация компрессии GGUF/LLM с quality/runtime gates вместо одного ratio.
 
-Лаборатория компрессии GGUF/LLM-моделей в составе вычислительного слоя SYNERGY.
+Ключевой принцип документации здесь — не путать подробно описанную будущую архитектуру с существующей реализацией:
 
-Этот README оформлен по общему стандарту документации SYNERGY: цель → архитектура → границы полномочий → статус доказанности → место в федерации → roadmap.
+```text
+specification != implementation
+architecture diagram != runtime integration
+roadmap != completed feature
+repository name != security/performance proof
+```
 
----
+Пока в `main` нет кода, strongest honest status — **STUB**.
 
-## 🧠 Место в системе
+## 2. 📦 Фактическое состояние `main`
+
+```text
+synergy_gguf_compress/
+└── README.md
+```
+
+Не обнаружены в root tree:
+
+- `src/` / `runtime/`;
+- `tests/`;
+- build/dependency manifest;
+- CI workflow;
+- persisted evidence;
+- release/deployment artifact.
+
+Это фиксируется как отрицательный, но полезный факт maturity audit.
+
+## 3. 🧠 Целевой design contract
+
+Будущая реализация должна иметь явную цепочку:
 
 ```mermaid
 flowchart LR
-    SYS[🧭 synergy_system] --> P[synergy_meta_os]
-    P --> THIS[🗜️ synergy_gguf_compress]
-    THIS --> E[📦 Evidence / artifacts]
-    THIS --> I[🔗 Integrations]
+    I[Typed inputs] --> V[Deterministic validation]
+    V --> R[Bounded runtime]
+    R --> E[Evidence]
+    E --> C[Typed contract]
+    C --> D[Downstream authority]
 ```
 
-Архитектурная стрелка означает принадлежность к системному домену. Она **не доказывает** наличие runtime dependency, импорта или готовой интеграции.
+Runtime не получает дополнительные полномочия только потому, что находится внутри SYNERGY.
 
----
+## 4. 📥 Планируемые inputs
 
-## 🏗️ Архитектурный контракт
+- exact GGUF/model artifact;
+- tensor metadata;
+- target bit budget;
+- calibration data;
+- hardware/runtime target;
+- baseline codec/model metrics;
 
-Для перехода из концепта/R&D в подтверждённый компонент репозиторий должен явно описать:
+Каждый input должен иметь version/source/provenance там, где это влияет на воспроизводимость или безопасность.
 
-- входные данные и их источник;
-- выходные артефакты и формат;
-- доверительные границы;
-- deterministic validation там, где она возможна;
-- конфигурацию и секреты без хранения ключей в README/коде;
-- тесты и воспроизводимый запуск;
-- ошибки, отказоустойчивость и rollback;
-- метрики, по которым можно отличить успех от красивой демонстрации;
-- взаимодействие с соседними authority-доменами без дублирования их полномочий.
+## 5. 📤 Планируемые outputs
 
----
+- compressed artifact;
+- decoder/runtime config;
+- artifact hashes;
+- compression ratio/bpw;
+- PPL/accuracy delta;
+- RAM/VRAM/tokens-s metrics;
 
-## 🛡️ Authority boundaries
+Output становится federation evidence только после schema validation и, при необходимости, cryptographic/content-addressed binding.
 
-В федерации SYNERGY действуют жёсткие разграничения:
+## 6. 🛡️ Authority boundaries
+
+Обязательное системное правило:
 
 ```text
-AI recommendation       != authorization
-service running         != permission
-blockchain record       != accounting truth
-mint / rebase           != external profit
-UI state                != ledger state
-architecture diagram    != tested integration
-repository name         != proof of implementation
+component output != downstream authorization
+local state      != global/canonical truth
+self-reported success != observed evidence
+generated artifact != verified artifact
 ```
 
-Этот репозиторий должен оставаться в пределах своей предметной области и передавать результаты каноническим владельцам соседних фактов.
+Canonical accounting, settlement, risk, governance, identity или deployment authority остаётся у соответствующего domain owner.
 
----
+## 7. 🔐 Threat / failure model
 
-## 🔬 Статус доказанности
-
-🧱 STUB / R&D — на текущем main полноценная реализация ещё не подтверждается артефактами.
-
-Применяемая шкала:
-
-| Метка | Значение |
+| Failure mode | Promotion requirement |
 |---|---|
-| ✅ GREEN | воспроизводимо подтверждено тестами/артефактами |
-| 🟡 CANDIDATE | реализация есть, но доказательство неполное |
-| 🔬 R&D | экспериментальная линия |
-| 🧱 STUB | архитектурный узел без достаточной реализации |
-| 🕰️ LEGACY | историческая ветка / provenance |
-| ❌ RED | тезис не прошёл проверку |
+| size projection without materialized artifact | mandatory reject/mitigation evidence before promotion |
+| tensor error mistaken for model quality | mandatory reject/mitigation evidence before promotion |
+| compression slows inference | mandatory reject/mitigation evidence before promotion |
+| unsupported GGUF tensor types | mandatory reject/mitigation evidence before promotion |
+| metadata corruption | mandatory reject/mitigation evidence before promotion |
+| baseline mismatch | mandatory reject/mitigation evidence before promotion |
 
----
+Threat model обязан становиться executable через negative tests, а не оставаться только prose.
 
-## 🔗 Связанные репозитории
+## 8. 🧪 Минимальная test matrix
 
-- [`synegy_ai_compress`](https://github.com/Shtenco/synegy_ai_compress)
-- [`synergy_qr_compress`](https://github.com/Shtenco/synergy_qr_compress)
-- [`synergy_gllm_nexus`](https://github.com/Shtenco/synergy_gllm_nexus)
+- [ ] byte/header integrity;
+- [ ] load in reference runtime;
+- [ ] tensor coverage;
+- [ ] full-model PPL;
+- [ ] task accuracy;
+- [ ] CPU/CUDA tokens-s;
+- [ ] RAM/VRAM;
+- [ ] round-trip metadata;
+- [ ] multiple models;
 
-Главная карта:
-- [🧭 SYNERGY SYSTEM](https://github.com/Shtenco/synergy_system)
-- [📚 Атлас всех 75 репозиториев](https://github.com/Shtenco/synergy_system/blob/main/docs/SYNERGY_REPOSITORY_ATLAS.md)
-- [🧾 Машиночитаемый registry](https://github.com/Shtenco/synergy_system/blob/main/registry/SYNERGY_REPOSITORIES.json)
+Дополнительно обязательны malformed-input tests, crash/restart behavior и deterministic fixtures для core logic.
 
----
+## 9. 📊 Evidence model
 
-## 🧪 Критерий перехода в GREEN
-
-Репозиторий нельзя считать зрелым только потому, что появился код. Для GREEN нужны как минимум:
-
-1. воспроизводимый запуск с чистого окружения;
-2. version-pinned зависимости;
-3. тесты основной функции и негативных сценариев;
-4. сохранённые evidence artifacts / metrics;
-5. отсутствие скрытого ручного шага в заявленном pipeline;
-6. documented failure modes;
-7. проверенная интеграционная граница с родительским слоем;
-8. README, который не утверждает больше, чем подтверждают артефакты.
-
----
-
-## 🗺️ Документационный стандарт
-
-По мере развития README должен расширяться предметными разделами, а не общими лозунгами:
+Strong evidence package будущего runtime должен связывать:
 
 ```text
-проблема
-  ↓
-теория / модель
-  ↓
-реализация
-  ↓
-эксперимент
-  ↓
-метрики
-  ↓
-ограничения
-  ↓
-воспроизводимость
-  ↓
-следующий рубеж
+input/event id
+input hash/provenance
+software commit
+configuration/policy version
+result/output
+test or execution status
+artifact hash
+timestamp
+limitations
 ```
 
-Эталон глубины оформления: [`Shtenco/dlp_solver`](https://github.com/Shtenco/dlp_solver).
+Без такого bundle README не должен использовать GREEN/E2E wording.
 
----
+## 10. 🏗️ Place in SYNERGY
 
-## 🚀 Roadmap документации и реализации
+```mermaid
+flowchart LR
+    SYS[synergy_system] --> P[synergy_meta_os]
+    P --> THIS[synergy_gguf_compress]
+    THIS --> E[typed evidence]
+    E --> NEXT[downstream canonical authority]
+```
 
-- [ ] описать реальный file tree после появления/ревизии исходников;
-- [ ] добавить Mermaid-диаграмму уже фактических модулей;
-- [ ] закрепить inputs/outputs в машиночитаемой схеме;
-- [ ] добавить smoke/integration/negative tests;
-- [ ] сохранить benchmark/evidence artifacts;
-- [ ] задокументировать связи с соседними репозиториями;
-- [ ] добавить CI-проверку README и битых cross-repo links;
-- [ ] повысить статус только после воспроизводимой проверки.
+Стрелка показывает target architecture, **не runtime dependency**.
 
----
+## 11. 🛠️ Reproducibility текущего состояния
 
-## 🛑 Что этот репозиторий пока НЕ утверждает
+Сегодня воспроизводить runtime нечего. Проверяемый факт:
 
-- что концептуальная архитектура уже является production-системой;
-- что наличие README доказывает работоспособность;
-- что cross-repo связь означает готовую интеграцию;
-- что непроверенные performance/security/economic claims являются фактами;
-- что этот репозиторий может присваивать authority соседнего домена.
+```bash
+git clone https://github.com/Shtenco/synergy_gguf_compress.git
+cd synergy_gguf_compress
+find . -maxdepth 2 -type f
+```
 
----
+Предметный результат текущего `main`: `README.md`.
 
-## Коротко
+Когда появится runtime, README обязан заменить этот раздел exact build/test commands и dependency versions.
+
+## 12. 🗺️ Current vs required repository map
+
+| Surface | Current | Required for CANDIDATE |
+|---|---:|---:|
+| repository-specific specification | ✅ | ✅ |
+| source/runtime | ❌ | ✅ |
+| typed schema/contract | ❌ | ✅ |
+| unit tests | ❌ | ✅ |
+| negative/security tests | ❌ | ✅ |
+| CI | ❌ | ✅ |
+| evidence artifacts | ❌ | ✅ |
+| reproducible build/run | ❌ | ✅ |
+
+## 13. ✅ STUB → CANDIDATE promotion gate
+
+Promotion is allowed only after all of the following exist:
+
+1. executable minimal core;
+2. typed input/output schema;
+3. deterministic unit tests;
+4. at least one negative/failure test per major invariant;
+5. pinned dependencies/toolchain;
+6. CI command;
+7. real repository artifact/evidence;
+8. README updated from target tense to implemented tense only for verified pieces.
+
+## 14. ✅ CANDIDATE → E2E_TESTED gate
+
+Requires:
+
+- upstream producer and downstream consumer;
+- exact payload binding;
+- observed execution;
+- persisted evidence;
+- verifier;
+- no authority bypass;
+- reproducible run.
+
+A local unit test is insufficient.
+
+## 15. 📊 Current evidence maturity
 
 ```text
-одна ответственность
-      ↓
-явные границы
-      ↓
-проверяемые артефакты
-      ↓
-связь с 75-repo federation
-      ↓
-только затем GREEN
+Problem/domain definition     ✅
+Architecture specification   ✅
+Inputs/outputs specification ✅
+Threat/failure model          ✅ documented
+Executable implementation    ❌
+Tests                        ❌
+Observed evidence            ❌
+E2E                          ❌
+Production                   ❌
 ```
+
+## 16. 🚀 Roadmap
+
+1. formalize v1 typed contract;
+2. implement smallest executable core;
+3. add deterministic fixtures;
+4. add failure/security tests;
+5. add CI;
+6. generate content-addressed evidence;
+7. integrate one upstream/downstream pair;
+8. run observed federation gate;
+9. only then upgrade maturity.
+
+## 17. 🛑 Что проект сейчас НЕ утверждает
+
+- что runtime существует;
+- что integration уже работает;
+- что security/performance claims доказаны;
+- что target diagrams соответствуют deployed topology;
+- что roadmap items completed;
+- что STUB может считаться E2E/production.
+
+## 18. 📚 Federation navigation
+
+- [SYNERGY SYSTEM](https://github.com/Shtenco/synergy_system)
+- [Атлас 75 репозиториев](https://github.com/Shtenco/synergy_system/blob/main/docs/SYNERGY_REPOSITORY_ATLAS.md)
+- [Documentation quality registry](https://github.com/Shtenco/synergy_system/blob/main/registry/DOCUMENTATION_QUALITY.json)
+
+**Итог:** repository теперь имеет подробный предметный specification dossier, но status сознательно остаётся 🧱 STUB до появления кода и evidence.
