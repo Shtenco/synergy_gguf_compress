@@ -1,3 +1,9 @@
+<!-- SCIENTIFIC-V3-2026:START -->
+<img src="assets/readme/scientific-architecture-v3.svg" width="100%" alt="GGUF / MODEL COMPRESSION SCIENCE"/>
+
+[Научно-техническое досье V3](docs/SCIENTIFIC_DOSSIER_V3_2026.md). Предыдущая документация сохранена целиком.
+<!-- SCIENTIFIC-V3-2026:END -->
+
 #  SYNERGY GGUF Compress — verified specification dossier
 
 > **Домен:** AI Model Compression  
